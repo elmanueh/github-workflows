@@ -1,21 +1,18 @@
 # Troubleshooting
 
-| What happened                                    | What to check                                                                                                              |
-| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| GitHub cannot resolve `@v1`                      | The central repository must publish `v1` before applications can use it.                                                   |
-| The operation is rejected                        | Use exactly `create-release`, `build-image` or `publish-image`.                                                            |
-| The branch is rejected                           | Run every operation from `main`.                                                                                           |
-| Build architecture is unsupported                | Use the example's native runner matrix. No architecture input or emulation is needed.                                      |
-| Release context is missing                       | Run `create-release` first in the same workflow run. Rerun all jobs if artifacts expired.                                  |
-| Context or build record does not match           | All operations must use the same repository, source commit and workflow run.                                               |
-| No image is built                                | There are no releasable changes, or an existing image was verified. Subsequent jobs still start and skip their heavy work. |
-| GitHub or GHCR access is denied                  | Check job permissions, repository Actions policy and package access for this repository.                                   |
-| Docker cannot find files                         | Check `context`, `dockerfile` and `.dockerignore`.                                                                         |
-| One architecture fails                           | Check platform support in Docker base images and native dependencies. The other build can still complete.                  |
-| An existing image is rejected                    | Its platforms, version or source commit differ. It is not overwritten; release the correction as a new version.            |
-| The tag exists but the GitHub release is missing | Retry at the same commit. The action completes the missing stable release.                                                 |
-| Publication failed after builds                  | Retry failed jobs while artifacts exist, or rerun all jobs at the same commit.                                             |
+| Problem                                           | What to do                                                                                                                                                  |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GitHub cannot find `elmanueh/release-actions@v1`  | Check that the action reference exists and your repository has access to it.                                                                                |
+| The operation is rejected                         | Use `create-release`, `build-image` or `publish-image`.                                                                                                     |
+| The branch or runner is rejected                  | Select `main` when starting the workflow and use a Linux runner.                                                                                            |
+| No release is created                             | Check the commits since the last release. `fix:` and `feat:` create versions; `docs:` and `chore:` do not.                                                  |
+| The tag exists but the GitHub release is missing  | Rerun the release workflow at the same commit to complete it.                                                                                               |
+| GitHub or GHCR returns an access error            | Check the job permissions in [configuration](configuration.md). For Docker, also check that the repository can write to its GHCR package.                   |
+| No Docker image is built                          | Use [release-with-docker.yml](../examples/release-with-docker.yml). Builds are skipped when there is no release or the matching image is already published. |
+| Docker cannot find the Dockerfile or source files | Check `dockerfile`, `context` and `.dockerignore`.                                                                                                          |
+| An architecture build fails                       | Keep both runners from the Docker example and check that your base images and build dependencies support amd64 and arm64. Then retry the failed jobs.       |
+| Publication fails after the builds                | Retry the failed jobs at the same commit. If more than 24 hours have passed, rerun all jobs.                                                                |
+| An existing image is rejected                     | Its version, source commit or platforms do not match. Publish the correction as a new version.                                                              |
+| A private image cannot be pulled                  | Sign in with `docker login ghcr.io` using credentials with access to the package.                                                                           |
 
-Registry failures stop publication instead of being interpreted as missing images. A missing child of an existing root manifest also fails verification without authorizing an overwrite.
-
-Application semantic-release configuration is isolated from the central process. You do not need to remove or customize it for this pipeline.
+Keep the examples' job dependencies and concurrency settings. All operations must belong to the same workflow run.

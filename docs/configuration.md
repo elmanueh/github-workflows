@@ -1,67 +1,48 @@
 # Configuration
 
-Use `elmanueh/release-actions@v1` with one of the three operations. Copy the complete examples to preserve job dependencies and permissions.
+Start from [release-only.yml](../examples/release-only.yml) or [release-with-docker.yml](../examples/release-with-docker.yml). Both run manually from `main`.
 
 ## Inputs
 
-| Input        | Default               | Purpose                                                        |
-| ------------ | --------------------- | -------------------------------------------------------------- |
-| `operation`  | Required              | `create-release`, `build-image` or `publish-image`.            |
-| `context`    | `.`                   | Docker build context for `build-image`.                        |
-| `dockerfile` | `Dockerfile`          | Dockerfile path relative to repository root for `build-image`. |
-| `token`      | `${{ github.token }}` | GitHub token. Normally leave unset.                            |
+| Input        | Default               | Description                                                                        |
+| ------------ | --------------------- | ---------------------------------------------------------------------------------- |
+| `operation`  | Required              | `create-release`, `build-image` or `publish-image`.                                |
+| `token`      | `${{ github.token }}` | Token for GitHub and GHCR. Normally leave unset and use the job permissions below. |
+| `context`    | `.`                   | Docker build context. Used by `build-image` only.                                  |
+| `dockerfile` | `Dockerfile`          | Dockerfile path relative to the repository root. Used by `build-image` only.       |
 
-There are no architecture, release tag, matrix, image name or cache-prefix inputs. The action detects the native architecture and retrieves release data internally.
+`create-release` publishes the tag and GitHub release. For Docker, run `build-image` on both architectures after the release, then `publish-image` after both builds. The complete example already sets this order.
 
-## Workflow requirements
+To use a different Dockerfile, change `dockerfile` in the build step. The image name is always `ghcr.io/<owner>/<repository>` in lowercase, and its tag matches the Git release tag.
 
-| Job     | Runner                                          | Permissions                         | Dependency                    |
-| ------- | ----------------------------------------------- | ----------------------------------- | ----------------------------- |
-| Release | `ubuntu-24.04`                                  | `contents: write`                   | Application CI, when present. |
-| Build   | Matrix of `ubuntu-24.04` and `ubuntu-24.04-arm` | `contents: read`, `packages: write` | Release.                      |
-| Publish | `ubuntu-24.04`                                  | `packages: write`                   | Both builds.                  |
+## Requirements
 
-Check out complete history in the release job (`fetch-depth: 0`) and source code in the build job. Use standard checkout without overriding `ref` or modifying source files. It selects the commit that started the workflow, not newer commits arriving while it runs. Publish needs no checkout. All operations must run in the same workflow run from `main` at the same source commit.
+- A `main` branch and Conventional Commit messages. Versioning is configured by this action; no semantic-release configuration is needed in your application.
+- Linux runners. The Docker example uses `ubuntu-24.04` for amd64 and `ubuntu-24.04-arm` for arm64.
+- Standard checkout of the workflow's commit. Keep `fetch-depth: 0` in the release job and do not override `ref`. Docker builds also need checkout; publication does not.
+- Keep all operations in the same workflow run and preserve the examples' `needs` and `concurrency` settings.
+- For Docker, a Dockerfile that supports both Linux architectures and permission to publish to the repository's GHCR package.
 
-For tag and GitHub release only, use [release-only.yml](../examples/release-only.yml). Create-release needs no Docker setup or GHCR access. The reusable workflow includes Docker; direct operations support applications with different release paths.
+| Job                | Permissions                         |
+| ------------------ | ----------------------------------- |
+| Release            | `contents: write`                   |
+| Docker build       | `contents: read`, `packages: write` |
+| Docker publication | `packages: write`                   |
 
-Keep `release-actions-${{ github.repository }}` concurrency with `cancel-in-progress: false`. The examples use `fail-fast: false` for builds so a failed architecture does not cancel the other one.
+Release only needs no Dockerfile, Docker setup or package permissions. The examples use the automatic GitHub token; no personal access token is required.
 
-## Internal data
+## Outputs
 
-`create-release` uploads an internal release context containing only the commit and tag, including when there is nothing to publish. Later operations retrieve it automatically from the same workflow run and check its commit. Build records must match the release tag and commit; artifact names identify the native architecture. Each workflow run coordinates one release. Existing images are checked only by Docker operations.
+Outputs are optional. Give the action step an `id` to use them as `${{ steps.<id>.outputs.<name> }}`.
 
-Applications do not need to define outputs or access these artifacts. If no release is needed or its image is already published, architecture builds are skipped internally. Publish verifies existing images again before reporting success.
+| Output       | Description                                                                         |
+| ------------ | ----------------------------------------------------------------------------------- |
+| `version`    | Release version, such as `1.2.3`.                                                   |
+| `tag`        | Release tag, such as `v1.2.3`.                                                      |
+| `image-name` | Repository-derived GHCR image name.                                                 |
+| `digest`     | Built image digest, or the verified published image digest. Empty for release only. |
+| `published`  | `true` when `publish-image` confirms publication; otherwise `false`.                |
 
-Artifacts are retained for one day. Rerun all jobs at the same commit if context or digest artifacts expired. A partial rerun of failed jobs can reuse the other architecture's record within that period.
+## Retries
 
-## Advanced outputs
-
-Give the action step an `id` only if you need its outputs for another purpose.
-
-| Output       | Value                                                                                                           |
-| ------------ | --------------------------------------------------------------------------------------------------------------- |
-| `version`    | Semantic release version when a release exists.                                                                 |
-| `tag`        | Git and Docker release tag.                                                                                     |
-| `image-name` | Repository-derived GHCR image name.                                                                             |
-| `digest`     | Architecture digest after `build-image`; verified manifest digest after publication or an existing image check. |
-| `published`  | `true` only when `publish-image` confirms a complete Docker release; otherwise `false`.                         |
-
-These outputs are optional. The standard examples do not consume them.
-
-## Cache reuse
-
-Each native architecture keeps its own cache: `docker-release-amd64` or `docker-release-arm64`. Both can read `docker-ci`. Caches belong to the application repository.
-
-An amd64 Docker CI build can use:
-
-```yaml
-cache-from: |
-  type=gha,scope=docker-ci
-  type=gha,scope=docker-release-amd64
-cache-to: type=gha,scope=docker-ci,mode=max
-```
-
-## Alternative reusable workflow
-
-`.github/workflows/release.yml` remains a wrapper that coordinates the same three operations. It accepts optional `context` and `dockerfile` inputs and exposes result outputs. Direct operation calls are the primary integration.
+Retry a failed workflow at the same commit. Completed releases and matching published images are reused. If more than 24 hours have passed, rerun all jobs. An incompatible existing image is rejected; publish the correction as a new version.

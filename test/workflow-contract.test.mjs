@@ -30,39 +30,31 @@ test('root action exposes named operations with automatic native architecture de
   )
 })
 
-for (const file of ['examples/release.yml', 'examples/release-with-ci.yml', 'examples/release-custom.yml']) {
-  test(`${file} uses a native runner matrix without passing version or state outputs`, () => {
-    const workflow = read(file)
-    const { release, build, publish } = workflow.jobs
+test('complete example uses a native runner matrix without passing version or state outputs', () => {
+  const workflow = read('examples/release-with-docker.yml')
+  const { release, build, publish } = workflow.jobs
 
-    assert.equal(workflow.concurrency['cancel-in-progress'], false)
+  assert.equal(workflow.concurrency['cancel-in-progress'], false)
 
-    assert.deepEqual(build.strategy.matrix.runner, ['ubuntu-24.04', 'ubuntu-24.04-arm'])
-    assert.equal(build.strategy['fail-fast'], false)
-    assert.equal(build['runs-on'], '${{ matrix.runner }}')
-    assert.equal(build.needs, 'release')
-    assert.equal(publish.needs, 'build')
-    assert.ok(!release.outputs && !build.if)
-    assert.equal(release.steps[0].with['fetch-depth'], 0)
+  assert.deepEqual(build.strategy.matrix.runner, ['ubuntu-24.04', 'ubuntu-24.04-arm'])
+  assert.equal(build.strategy['fail-fast'], false)
+  assert.equal(build['runs-on'], '${{ matrix.runner }}')
+  assert.equal(build.needs, 'release')
+  assert.equal(publish.needs, 'build')
+  assert.ok(!release.outputs && !build.if)
+  assert.equal(release.steps[0].with['fetch-depth'], 0)
 
-    for (const [job, operation] of [
-      [release, 'create-release'],
-      [build, 'build-image'],
-      [publish, 'publish-image']
-    ]) {
-      const step = job.steps.find((step) => step.uses === 'elmanueh/release-actions@v1')
+  for (const [job, operation] of [
+    [release, 'create-release'],
+    [build, 'build-image'],
+    [publish, 'publish-image']
+  ]) {
+    const step = job.steps.find((step) => step.uses === 'elmanueh/release-actions@v1')
 
-      assert.equal(step.with.operation, operation)
+    assert.equal(step.with.operation, operation)
 
-      for (const key of Object.keys(step.with)) assert.ok(['operation', 'context', 'dockerfile', 'token'].includes(key))
-    }
-  })
-}
-
-test('CI example waits for application checks before creating the release', () => {
-  const workflow = read('examples/release-with-ci.yml')
-
-  assert.equal(workflow.jobs.release.needs, 'ci')
+    for (const key of Object.keys(step.with)) assert.ok(['operation', 'context', 'dockerfile', 'token'].includes(key))
+  }
 })
 
 test('optional reusable workflow retains Docker path inputs and result outputs', () => {
@@ -95,7 +87,7 @@ test('Docker preflight belongs to builds and publication accepts an existing ima
 test('create-release never runs Docker commands or Docker actions', () => {
   const steps = read('action.yml').runs.steps
   const dockerSteps = steps.filter((step) => step.uses?.startsWith('docker/') || step.run?.includes('/src/docker/'))
-  const releasePermissions = read('examples/release.yml').jobs.release.permissions
+  const releasePermissions = read('examples/release-with-docker.yml').jobs.release.permissions
 
   for (const step of dockerSteps) {
     assert.ok(step.if, step.name)
