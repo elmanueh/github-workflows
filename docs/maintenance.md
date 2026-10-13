@@ -15,7 +15,9 @@ Dependencies and their lockfile live at the root. No QEMU or builders outside Gi
 
 Create-release requires a full source checkout on `main` matching the workflow SHA. Semantic-release uses an owned configuration directory and explicit application Git paths, preventing caller dry-run or extension settings from affecting it. A tag without its stable GitHub release is recoverable.
 
-Release context and architecture records have a schema version and must match the repository, commit and workflow run. Build checkout must also match that commit. The action detects architecture from the native Linux runtime, never from caller-supplied metadata.
+The scripts are internal to the action. Each workflow run coordinates one release; artifact downloads use that same run. Release context contains only revision, tag and digest. Image name, version and release state are derived rather than stored. Architecture records contain revision, tag and digest; their artifact and file names identify the architecture. Build records must match the release tag and commit, and build checkout must match that commit. The action detects architecture from the native Linux runtime, never from caller-supplied metadata.
+
+Inputs are checked at the action entry point. Internal steps trust the action's outputs and execution conditions. Context and build records are checked when read; functions receiving those records do not repeat their validation. Internal artifact formats are not a public compatibility contract.
 
 The `release-context` artifact always exists after successful create-release, including a no-release state. Architecture records are uploaded only for required builds. Artifacts are retained for one day and replaced on reruns within the same run. Records from a previous successful architecture attempt can be reused by a failed-job retry.
 
@@ -23,7 +25,7 @@ The `release-context` artifact always exists after successful create-release, in
 
 Root manifests are inspected with Buildx `--raw` and hashed without trimming bytes. Children are subsequently checked by immutable digest; missing children do not make the root tag appear absent.
 
-Publish validates build records and image version, source and commit labels. It rechecks the tag immediately before writing, then verifies its resulting digest and both architectures. Matching published images succeed without replacement.
+Publish inspects the tag once before writing, validates build records and image version, source and commit labels, then verifies the resulting digest and both architectures. Matching published images succeed without reading build records or replacing the tag. Each inspection reads the root manifest once and trusts the registry's content-addressing contract.
 
 Serialize all writers with `release-actions-<repository>` and do not cancel an active publication. GHCR has no compare-and-set tag write, so independent processes must not push these same release tags.
 

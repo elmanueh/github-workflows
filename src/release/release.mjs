@@ -5,7 +5,6 @@ import { isolatedRelease } from './isolated-release.mjs'
 import { ensureGithubRelease } from './github-release.mjs'
 import { parserOpts } from './release-config.mjs'
 
-if (process.env.GITHUB_REF !== 'refs/heads/main') throw new Error('Run this release workflow from the main branch.')
 const cwd = process.cwd()
 const git = (args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
 const revision = git(['rev-parse', 'HEAD'])
@@ -27,12 +26,10 @@ if (!tag) {
   tag = candidates[0]
 }
 if (tag) {
-  if (!/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(tag)) throw new Error('Invalid stable release tag.')
   await ensureGithubRelease({
     repository: process.env.GITHUB_REPOSITORY,
     tag,
     revision,
-    tagRevision: git(['rev-parse', `${tag}^{commit}`]),
     notes: async () => {
       if (result?.nextRelease?.notes) return result.nextRelease.notes
       const parent = git(['rev-list', '--parents', '-n', '1', tag]).split(' ')[1]

@@ -27,7 +27,7 @@ Keep `release-actions-${{ github.repository }}` concurrency with `cancel-in-prog
 
 ## Internal data
 
-`create-release` uploads an internal release context, including when there is nothing to publish. Later operations retrieve it automatically and validate the repository, commit and workflow run. Build records are also bound to the release and native architecture.
+`create-release` uploads an internal release context containing the commit, tag and optional published digest, including when there is nothing to publish. Later operations retrieve it automatically from the same workflow run and check its commit. Build records must match the release tag and commit; artifact names identify the native architecture. Each workflow run coordinates one release.
 
 Applications do not need to define outputs or access these artifacts. If no release is needed or its image is already published, architecture builds are skipped internally. Publish verifies existing images again before reporting success.
 

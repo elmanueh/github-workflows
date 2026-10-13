@@ -121,9 +121,7 @@ runs:
         RELEASE_TAG: ${{ steps.release.outputs.tag || steps.context.outputs.tag }}
       run: |
         node "$ACTION_DIRECTORY/src/docker/check-release.mjs"
-      if:
-        ${{ (inputs.operation == 'create-release' && steps.release.outputs.release-ready == 'true') || (inputs.operation ==
-        'publish-image' && steps.context.outputs.has-release == 'true') }}
+      if: ${{ inputs.operation == 'create-release' && steps.release.outputs.release-ready == 'true' }}
 
     - name: Save internal release context
       shell: bash
@@ -197,7 +195,7 @@ runs:
         pattern: image-digest-*
         path: ${{ runner.temp }}/release-actions/digests
         merge-multiple: true
-      if: ${{ inputs.operation == 'publish-image' && steps.check.outputs.should-publish == 'true' }}
+      if: ${{ inputs.operation == 'publish-image' && steps.context.outputs.should-build == 'true' }}
 
     - name: Publish and verify multi-platform image
       id: publish
@@ -208,7 +206,7 @@ runs:
         RELEASE_TAG: ${{ steps.release.outputs.tag || steps.context.outputs.tag }}
       run: |
         node "$ACTION_DIRECTORY/src/docker/publish.mjs"
-      if: ${{ inputs.operation == 'publish-image' && steps.check.outputs.should-publish == 'true' }}
+      if: ${{ inputs.operation == 'publish-image' && steps.context.outputs.has-release == 'true' }}
 
     - name: Return operation result
       id: finish

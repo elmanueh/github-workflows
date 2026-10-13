@@ -1,5 +1,5 @@
-export async function githubApi(path, { method = 'GET', body } = {}) {
-  const response = await fetch(`${process.env.GITHUB_API_URL || 'https://api.github.com'}${path}`, {
+export async function githubApi(path, { method = 'GET', body } = {}, request = fetch) {
+  const response = await request(`${process.env.GITHUB_API_URL || 'https://api.github.com'}${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
@@ -10,14 +10,13 @@ export async function githubApi(path, { method = 'GET', body } = {}) {
     body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(30000)
   })
-  const data = await response.json()
-  if (!response.ok && response.status !== 404)
+  if (!response.ok && !(method === 'GET' && response.status === 404))
     throw new Error(`GitHub release request failed: HTTP ${response.status}.`)
+  const data = await response.json()
   return { status: response.status, data }
 }
 
-export async function ensureGithubRelease({ repository, tag, revision, tagRevision, notes }, api = githubApi) {
-  if (tagRevision !== revision) throw new Error('Release tag does not point to the checked-out source commit.')
+export async function ensureGithubRelease({ repository, tag, revision, notes }, api = githubApi) {
   const path = `/repos/${repository}/releases`
   let response = await api(`${path}/tags/${encodeURIComponent(tag)}`)
   if (response.status === 404) {
@@ -33,13 +32,7 @@ export async function ensureGithubRelease({ repository, tag, revision, tagRevisi
       }
     })
   }
-  if (
-    response.status < 200 ||
-    response.status >= 300 ||
-    response.data.tag_name !== tag ||
-    response.data.draft ||
-    response.data.prerelease
-  ) {
+  if (response.data.draft || response.data.prerelease) {
     throw new Error('Expected a published stable GitHub release for this tag.')
   }
 }

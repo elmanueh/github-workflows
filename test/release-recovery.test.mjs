@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import getConfig from '../node_modules/semantic-release/lib/get-config.js'
 import { isolatedRelease } from '../src/release/isolated-release.mjs'
-import { ensureGithubRelease } from '../src/release/github-release.mjs'
+import { ensureGithubRelease, githubApi } from '../src/release/github-release.mjs'
 
 test('application dryRun, extensions and executable config cannot affect centralized release', async () => {
   const caller = mkdtempSync(join(tmpdir(), 'release-config-caller-'))
@@ -21,6 +21,7 @@ test('application dryRun, extensions and executable config cannot affect central
   const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
 
   let isolatedDirectory
+  let observed
 
   try {
     await isolatedRelease({
@@ -30,23 +31,30 @@ test('application dryRun, extensions and executable config cannot affect central
       repositoryUrl: 'https://github.com/example/app.git',
       run: async (options, context) => {
         isolatedDirectory = context.cwd
-        assert.notEqual(context.cwd, caller)
-        assert.equal(JSON.parse(readFileSync(join(context.cwd, '.releaserc.json'), 'utf8')).dryRun, false)
-
         const loaded = await getConfig(
           { ...context, logger: { log() {}, success() {}, error() {}, warn() {} } },
           options
         )
-        assert.equal(loaded.options.dryRun, false)
-        assert.equal(loaded.options.noCi, false)
-        assert.deepEqual(loaded.options.branches, ['main'])
-        assert.equal(context.env.GIT_WORK_TREE, caller)
-        assert.equal(
-          execFileSync('git', ['rev-parse', 'HEAD'], { cwd: context.cwd, env: context.env, encoding: 'utf8' }).trim(),
-          head
-        )
+        observed = {
+          config: JSON.parse(readFileSync(join(context.cwd, '.releaserc.json'), 'utf8')),
+          options: loaded.options,
+          worktree: context.env.GIT_WORK_TREE,
+          head: execFileSync('git', ['rev-parse', 'HEAD'], {
+            cwd: context.cwd,
+            env: context.env,
+            encoding: 'utf8'
+          }).trim()
+        }
       }
     })
+
+    assert.notEqual(isolatedDirectory, caller)
+    assert.deepEqual(observed.config, {})
+    assert.equal(observed.options.dryRun, false)
+    assert.equal(observed.options.noCi, false)
+    assert.deepEqual(observed.options.branches, ['main'])
+    assert.equal(observed.worktree, caller)
+    assert.equal(observed.head, head)
     assert.throws(() => readFileSync(join(isolatedDirectory, '.releaserc.json')), /ENOENT/)
   } finally {
     rmSync(join(caller, 'package.json'))
@@ -59,18 +67,20 @@ const release = {
   repository: 'example/app',
   tag: 'v1.2.3',
   revision: 'commit-a',
-  tagRevision: 'commit-a',
   notes: async () => 'Release notes'
 }
 
 test('a tag without a GitHub release is recovered without creating another version', async () => {
   const calls = []
-  await ensureGithubRelease(release, async (path, options) => {
+  const api = async (path, options) => {
     calls.push({ path, options })
     return options?.method === 'POST'
       ? { status: 201, data: { tag_name: release.tag, draft: false, prerelease: false } }
       : { status: 404 }
-  })
+  }
+
+  await ensureGithubRelease(release, api)
+
   assert.equal(calls.length, 2)
   assert.equal(calls[1].options.body.tag_name, 'v1.2.3')
   assert.equal(calls[1].options.body.target_commitish, 'commit-a')
@@ -78,31 +88,49 @@ test('a tag without a GitHub release is recovered without creating another versi
 })
 
 test('an existing stable release is reused without a write', async () => {
-  await ensureGithubRelease(release, async (path, options) => {
-    assert.equal(options, undefined)
-    return { status: 200, data: { tag_name: release.tag, draft: false, prerelease: false } }
-  })
+  const calls = []
+  const api = async (path, options) => {
+    calls.push({ path, options })
+    return { status: 200, data: { draft: false, prerelease: false } }
+  }
+
+  await ensureGithubRelease(release, api)
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].options, undefined)
 })
 
-test('wrong commits, private API failures and draft releases cannot proceed to Docker', async () => {
-  await assert.rejects(
-    ensureGithubRelease({ ...release, tagRevision: 'another-commit' }, async () => {
-      throw new Error('API must not be called')
-    }),
-    /does not point/
-  )
+for (const state of ['draft', 'prerelease']) {
+  test(`an existing ${state} release is rejected`, async () => {
+    const api = async () => ({ status: 200, data: { [state]: true } })
 
-  for (const response of [
-    { status: 403, data: {} },
-    { status: 200, data: { tag_name: release.tag, draft: true } },
-    { status: 200, data: { tag_name: 'v9.9.9' } }
-  ]) {
-    await assert.rejects(
-      ensureGithubRelease(release, async (path, options) => {
-        assert.equal(options, undefined)
-        return response
-      }),
-      /published stable GitHub release/
-    )
+    await assert.rejects(ensureGithubRelease(release, api), /published stable GitHub release/)
+  })
+}
+
+for (const [method, status] of [
+  ['GET', 403],
+  ['GET', 500],
+  ['POST', 404]
+]) {
+  test(`GitHub ${method} HTTP ${status} fails in the API adapter`, async () => {
+    const request = async () => ({ ok: false, status })
+
+    await assert.rejects(githubApi('/repos/example/app/releases', { method }, request), new RegExp(`HTTP ${status}`))
+  })
+}
+
+test('a missing release can be recovered after the API reports GET 404', async () => {
+  const writes = []
+  const request = async (url, options) => {
+    if (options.method === 'GET') return { ok: false, status: 404, json: async () => ({}) }
+    writes.push(JSON.parse(options.body))
+    return { ok: true, status: 201, json: async () => ({ draft: false, prerelease: false }) }
   }
+  const api = (path, options) => githubApi(path, options, request)
+
+  await ensureGithubRelease(release, api)
+
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0].tag_name, release.tag)
 })

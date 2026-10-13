@@ -1,58 +1,130 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, rmdirSync, mkdirSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { spawnSync, execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { validateContext, validateBuildRecord } from '../src/release/context.mjs'
 
-const identity = { repository: 'Example/App', revision: 'commit-a', runId: '123' }
-
-const context = {
-  schema: 1,
-  ...identity,
-  image: 'ghcr.io/example/app',
-  tag: 'v1.2.3',
-  version: '1.2.3',
-  status: 'ready',
-  digest: ''
-}
-
+const context = { revision: 'commit-a', tag: 'v1.2.3', digest: '' }
 const digest = 'sha256:' + 'a'.repeat(64)
 
-test('ready, no-release and already-published contexts are accepted', () => {
-  assert.equal(validateContext(context, identity), context)
-  validateContext({ ...context, status: 'no-release', tag: '', version: '' }, identity)
-  validateContext({ ...context, status: 'already-published', digest }, identity)
+test('context belongs to the current commit', () => {
+  const result = validateContext(context, 'commit-a')
+
+  assert.equal(result, context)
 })
 
-test('foreign or expired-run context cannot be used by another release', () => {
-  for (const override of [
-    { schema: 2 },
-    { repository: 'other/app' },
-    { revision: 'commit-b' },
-    { runId: '124' },
-    { image: 'ghcr.io/other/app' }
-  ])
-    assert.throws(() => validateContext({ ...context, ...override }, identity))
-
-  for (const override of [
-    { tag: 'latest' },
-    { version: '9.9.9' },
-    { status: 'invalid' },
-    { status: 'already-published', digest: '' },
-    { status: 'no-release' }
-  ])
-    assert.throws(() => validateContext({ ...context, ...override }, identity))
+test('context from a different commit is rejected', () => {
+  assert.throws(() => validateContext(context, 'commit-b'), /does not belong/)
 })
 
-test('architecture records must match the release, workflow and architecture', () => {
-  const record = { schema: 1, ...identity, image: context.image, tag: context.tag, architecture: 'amd64', digest }
+test('build record returns its validated digest', () => {
+  const record = { revision: context.revision, tag: context.tag, digest }
 
-  assert.equal(validateBuildRecord(record, context, 'amd64'), digest)
+  const result = validateBuildRecord(record, context, 'amd64')
 
-  for (const override of [
-    { runId: '124' },
-    { tag: 'v9.9.9' },
-    { revision: 'commit-b' },
-    { architecture: 'arm64' },
-    { digest: 'invalid' }
-  ])
-    assert.throws(() => validateBuildRecord({ ...record, ...override }, context, 'amd64'))
+  assert.equal(result, digest)
+})
+
+for (const [name, override, error] of [
+  ['tag', { tag: 'v9.9.9' }, /does not belong/],
+  ['commit', { revision: 'commit-b' }, /does not belong/],
+  ['digest', { digest: 'invalid' }, /Invalid image digest/]
+]) {
+  test(`build record rejects the wrong ${name}`, () => {
+    const record = { revision: context.revision, tag: context.tag, digest, ...override }
+
+    assert.throws(() => validateBuildRecord(record, context, 'amd64'), error)
+  })
+}
+
+function runner(t) {
+  const directory = mkdtempSync(join(tmpdir(), 'release-context-'))
+  const outputFile = join(directory, 'output')
+  const releaseFile = join(directory, 'release-actions', 'release.json')
+  mkdirSync(join(directory, 'release-actions'))
+  t.after(() => {
+    for (const file of [outputFile, releaseFile]) rmSync(file, { force: true })
+    rmdirSync(join(directory, 'release-actions'))
+    rmdirSync(directory)
+  })
+  const env = {
+    ...process.env,
+    RUNNER_TEMP: directory,
+    GITHUB_OUTPUT: outputFile,
+    GITHUB_SHA: context.revision,
+    GITHUB_REPOSITORY: 'Example/App',
+    OPERATION: 'publish-image'
+  }
+  const script = fileURLToPath(new URL('../src/release/context.mjs', import.meta.url))
+  return {
+    outputFile,
+    releaseFile,
+    run: (args = [], overrides = {}) =>
+      spawnSync(process.execPath, [script, ...args], { env: { ...env, ...overrides }, encoding: 'utf8' })
+  }
+}
+
+for (const [name, tag, imageDigest, shouldBuild] of [
+  ['pending release', 'v1.2.3', '', 'true'],
+  ['no release', '', '', 'false'],
+  ['published release', 'v1.2.3', digest, 'false']
+]) {
+  test(`save and load ${name} preserves public outputs`, (t) => {
+    const mock = runner(t)
+
+    const saved = mock.run(['save'], { RELEASE_TAG: tag, IMAGE_DIGEST: imageDigest })
+    writeFileSync(mock.outputFile, '')
+    const loaded = mock.run()
+
+    assert.equal(saved.status, 0, saved.stderr)
+    assert.equal(loaded.status, 0, loaded.stderr)
+    assert.deepEqual(JSON.parse(readFileSync(mock.releaseFile, 'utf8')), {
+      revision: context.revision,
+      tag,
+      digest: imageDigest
+    })
+    const outputs = readFileSync(mock.outputFile, 'utf8')
+    assert.ok(outputs.includes(`version=${tag.slice(1)}\n`))
+    assert.ok(outputs.includes(`has-release=${Boolean(tag)}\n`))
+    assert.ok(outputs.includes(`should-build=${shouldBuild}\n`))
+    assert.ok(outputs.includes('image-name=ghcr.io/example/app\n'))
+  })
+}
+
+for (const [name, contents, error] of [
+  ['missing', undefined, /ENOENT/],
+  ['invalid JSON', 'not json', /SyntaxError/]
+]) {
+  test(`${name} context fails loading`, (t) => {
+    const mock = runner(t)
+    if (contents !== undefined) writeFileSync(mock.releaseFile, contents)
+
+    const result = mock.run()
+
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, error)
+  })
+}
+
+test('build checkout must match the context commit', (t) => {
+  const mock = runner(t)
+  writeFileSync(mock.releaseFile, JSON.stringify(context))
+
+  const result = mock.run([], { OPERATION: 'build-image' })
+
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /Build checkout does not match/)
+})
+
+test('matching build checkout loads its context', (t) => {
+  const mock = runner(t)
+  const revision = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+  writeFileSync(mock.releaseFile, JSON.stringify({ ...context, revision }))
+
+  const result = mock.run([], { OPERATION: 'build-image', GITHUB_SHA: revision })
+
+  assert.equal(result.status, 0, result.stderr)
 })

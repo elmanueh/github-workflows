@@ -48,7 +48,6 @@ export function verifyArchitecture(reference, architecture, { tag, revision, sou
 }
 
 export function verifyImage(manifest, { image, tag, revision, source }, run = docker) {
-  const digest = assertDigest(manifest.digest)
   const runtime = (manifest.manifests || []).filter((item) => item.platform?.os === 'linux')
   const actual = runtime.map((item) => item.platform.architecture).sort()
   if (JSON.stringify(actual) !== JSON.stringify([...architectures].sort((a, b) => a.localeCompare(b)))) {
@@ -64,7 +63,7 @@ export function verifyImage(manifest, { image, tag, revision, source }, run = do
     assertDigest(item.digest)
     verifyArchitecture(`${image}@${item.digest}`, item.platform.architecture, { tag, revision, source }, run)
   }
-  return digest
+  return manifest.digest
 }
 
 export function inspectRelease(identity, run = docker) {
@@ -76,12 +75,8 @@ export function inspectRelease(identity, run = docker) {
     if (isMissingManifest(error.message, reference)) return null
     throw new Error(`Cannot safely inspect ${reference}: ${error.message}`)
   }
-  JSON.parse(raw)
   // Raw inspection only reads the root manifest. A missing child cannot be
-  // mistaken for an absent tag. Hash the exact bytes, then inspect by digest.
-  const hash = (bytes) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`
-  const digest = hash(raw)
-  const pinned = run(['buildx', 'imagetools', 'inspect', `${identity.image}@${digest}`, '--raw'])
-  if (hash(pinned) !== digest) throw new Error('Registry returned a mismatched manifest digest.')
-  return verifyImage({ ...JSON.parse(pinned), digest }, identity, run)
+  // mistaken for an absent tag. Hash the exact bytes and inspect children by digest.
+  const digest = `sha256:${createHash('sha256').update(raw).digest('hex')}`
+  return verifyImage({ ...JSON.parse(raw), digest }, identity, run)
 }

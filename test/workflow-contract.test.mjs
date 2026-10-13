@@ -7,6 +7,8 @@ const read = (file) => parse(readFileSync(new URL(`../${file}`, import.meta.url)
 
 test('root action exposes named operations with automatic native architecture detection', () => {
   const action = read('action.yml')
+  const steps = action.runs.steps
+  const builds = steps.filter((step) => step.uses === 'docker/build-push-action@v7')
 
   assert.equal(action.runs.using, 'composite')
   assert.deepEqual(Object.keys(action.inputs).sort(), ['context', 'dockerfile', 'operation', 'token'])
@@ -15,11 +17,7 @@ test('root action exposes named operations with automatic native architecture de
 
   for (const name of ['version', 'tag', 'image-name', 'digest', 'published']) assert.ok(action.outputs[name])
 
-  const steps = action.runs.steps
-
   assert.ok(!steps.some((step) => step.uses?.includes('setup-qemu')))
-
-  const builds = steps.filter((step) => step.uses === 'docker/build-push-action@v7')
 
   assert.equal(builds.length, 1)
   assert.equal(builds[0].with.platforms, '${{ steps.validate.outputs.platform }}')
@@ -32,13 +30,12 @@ test('root action exposes named operations with automatic native architecture de
   )
 })
 
-test('examples use a native runner matrix without passing version or state outputs', () => {
-  for (const file of ['examples/release.yml', 'examples/release-with-ci.yml', 'examples/release-custom.yml']) {
+for (const file of ['examples/release.yml', 'examples/release-with-ci.yml', 'examples/release-custom.yml']) {
+  test(`${file} uses a native runner matrix without passing version or state outputs`, () => {
     const workflow = read(file)
+    const { release, build, publish } = workflow.jobs
 
     assert.equal(workflow.concurrency['cancel-in-progress'], false)
-
-    const { release, build, publish } = workflow.jobs
 
     assert.deepEqual(build.strategy.matrix.runner, ['ubuntu-24.04', 'ubuntu-24.04-arm'])
     assert.equal(build.strategy['fail-fast'], false)
@@ -59,8 +56,13 @@ test('examples use a native runner matrix without passing version or state outpu
 
       for (const key of Object.keys(step.with)) assert.ok(['operation', 'context', 'dockerfile', 'token'].includes(key))
     }
-  }
-  assert.equal(read('examples/release-with-ci.yml').jobs.release.needs, 'ci')
+  })
+}
+
+test('CI example waits for application checks before creating the release', () => {
+  const workflow = read('examples/release-with-ci.yml')
+
+  assert.equal(workflow.jobs.release.needs, 'ci')
 })
 
 test('optional reusable workflow retains Docker path inputs and result outputs', () => {
@@ -73,4 +75,22 @@ test('optional reusable workflow retains Docker path inputs and result outputs',
   for (const name of ['version', 'tag', 'image-name', 'digest', 'published']) assert.ok(contract.outputs[name])
   assert.equal(workflow.jobs.build.steps[1].uses, 'elmanueh/release-actions@v1')
   assert.equal(workflow.jobs.build.steps[1].with.operation, 'build-image')
+})
+
+test('publication verifies releases while downloading build records only when needed', () => {
+  const steps = read('action.yml').runs.steps
+
+  const check = steps.find((step) => step.id === 'check')
+  const publish = steps.find((step) => step.id === 'publish')
+  const download = steps.find((step) => step.with?.pattern === 'image-digest-*')
+
+  assert.equal(
+    check.if.trim(),
+    "${{ inputs.operation == 'create-release' && steps.release.outputs.release-ready == 'true' }}"
+  )
+  assert.equal(publish.if, "${{ inputs.operation == 'publish-image' && steps.context.outputs.has-release == 'true' }}")
+  assert.equal(
+    download.if,
+    "${{ inputs.operation == 'publish-image' && steps.context.outputs.should-build == 'true' }}"
+  )
 })

@@ -10,18 +10,18 @@ const analyze = (messages) =>
     logger: { log() {} }
   })
 
-test('fix creates a patch and feat creates a minor release', async () => {
-  assert.equal(await analyze(['fix: repair health check']), 'patch')
-  assert.equal(await analyze(['feat(api): add endpoint']), 'minor')
-})
+for (const [name, messages, expected] of [
+  ['fix creates a patch', ['fix: repair health check'], 'patch'],
+  ['feat creates a minor', ['feat(api): add endpoint'], 'minor'],
+  ['breaking feat header creates a major', ['feat!: replace response format'], 'major'],
+  ['breaking scoped fix creates a major', ['fix(api)!: change authentication'], 'major'],
+  ['breaking footer creates a major', ['feat: replace API\n\nBREAKING CHANGE: old endpoints removed'], 'major'],
+  ['maintenance commits skip release', ['docs: explain installation', 'chore: update tooling'], null],
+  ['highest change wins', ['fix: repair request', 'feat: add route', 'feat!: remove old route'], 'major']
+]) {
+  test(name, async () => {
+    const result = await analyze(messages)
 
-test('breaking headers and BREAKING CHANGE footers create a major release', async () => {
-  assert.equal(await analyze(['feat!: replace response format']), 'major')
-  assert.equal(await analyze(['fix(api)!: change authentication']), 'major')
-  assert.equal(await analyze(['feat: replace API\n\nBREAKING CHANGE: old endpoints removed']), 'major')
-})
-
-test('maintenance commits skip releases and the highest change wins', async () => {
-  assert.equal(await analyze(['docs: explain installation', 'chore: update tooling']), null)
-  assert.equal(await analyze(['fix: repair request', 'feat: add route', 'feat!: remove old route']), 'major')
-})
+    assert.equal(result, expected)
+  })
+}

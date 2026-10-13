@@ -9,7 +9,7 @@ export async function isolatedRelease({ gitDirectory, worktree, env, repositoryU
   const configFile = join(directory, '.releaserc.json')
   // Stop config discovery in this owned directory. Git still operates on the
   // application through explicit paths, without loading its release config.
-  writeFileSync(configFile, JSON.stringify({ extends: [], dryRun: false, ci: true }))
+  writeFileSync(configFile, '{}')
   try {
     return await run(
       { ...config, branches: ['main'], repositoryUrl, extends: [], dryRun: false, ci: true, noCi: false },

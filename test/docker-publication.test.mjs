@@ -87,7 +87,7 @@ function registry({
   return { run, calls }
 }
 
-function publication(mock, overrides = {}) {
+function publication(mock) {
   const directory = mkdtempSync(join(tmpdir(), 'release-publication-'))
 
   const metadataFile = join(directory, 'metadata.json')
@@ -96,7 +96,7 @@ function publication(mock, overrides = {}) {
     return publishImage(release, {
       run: mock.run,
       metadataFile,
-      digests: { ...children, ...overrides }
+      loadDigests: () => children
     })
   } finally {
     rmSync(metadataFile, { force: true })
@@ -126,77 +126,79 @@ test('only explicit missing-manifest responses authorize publication', () => {
   }
 })
 
-test('registry failures never trigger a manifest write', () => {
-  for (const inspectionError of ['unauthorized', 'network timeout', 'HTTP 500', 'unexpected registry error']) {
+for (const inspectionError of ['unauthorized', 'network timeout', 'HTTP 500', 'unexpected registry error']) {
+  test(`registry failure ${inspectionError} never triggers a manifest write`, () => {
     const mock = registry({ inspectionError })
 
     assert.throws(() => publication(mock), /Cannot safely inspect/)
     assert.ok(!mock.calls.some((args) => args[2] === 'create'))
-  }
-})
+  })
+}
 
 test('a matching existing release succeeds without artifacts or a write', () => {
   const mock = registry({ exists: true })
 
   const result = publishImage(release, {
     run: mock.run,
-    digests: undefined
+    loadDigests: () => {
+      throw new Error('Artifacts must not be loaded')
+    }
   })
   assert.deepEqual(result, { digest: manifest.digest, state: 'Already published' })
   assert.ok(!mock.calls.some((args) => args[2] === 'create'))
 })
 
-test('existing releases with a different commit or missing platforms are rejected', () => {
-  for (const options of [
-    { configRevision: 'another-commit' },
-    { configVersion: '9.9.9' },
-    { configSource: 'https://github.com/another/repository' },
-    { descriptor: { ...manifest, manifests: manifest.manifests.slice(0, 1) } }
-  ]) {
+for (const [name, options] of [
+  ['wrong commit', { configRevision: 'another-commit' }],
+  ['wrong version', { configVersion: '9.9.9' }],
+  ['wrong source', { configSource: 'https://github.com/another/repository' }],
+  ['missing platform', { descriptor: { ...manifest, manifests: manifest.manifests.slice(0, 1) } }],
+  ['duplicate platform', { descriptor: { ...manifest, manifests: [...manifest.manifests, manifest.manifests[0]] } }]
+]) {
+  test(`existing release with ${name} is rejected without writing`, () => {
     const mock = registry({ exists: true, ...options })
 
     assert.throws(() => publication(mock), /does not match|Expected Linux/)
     assert.ok(!mock.calls.some((args) => args[2] === 'create'))
-  }
-})
+  })
+}
 
-test('a matching tag that appears just before publication is reused without a write', () => {
-  const mock = registry({ exists: true })
-
-  const original = mock.run
-
-  let first = true
-  mock.run = (args) => {
-    if (args[3] === `${release.image}:${release.tag}` && first) {
-      first = false
-      throw new Error(`ERROR: ${release.image}:${release.tag}: not found`)
+test('a non-Linux runtime manifest is rejected without writing', () => {
+  const mock = registry({
+    exists: true,
+    descriptor: {
+      ...manifest,
+      manifests: [...manifest.manifests, { digest: digest('c'), platform: { os: 'windows', architecture: 'amd64' } }]
     }
-    return original(args)
-  }
-  assert.deepEqual(publication(mock), { digest: manifest.digest, state: 'Already published' })
+  })
+
+  assert.throws(() => publication(mock), /Unexpected non-Linux/)
   assert.ok(!mock.calls.some((args) => args[2] === 'create'))
 })
 
-test('publication validates source digests, labels and the final digest', () => {
+test('publication creates both architecture references once and verifies its result', () => {
   const mock = registry()
 
-  assert.deepEqual(publication(mock), { digest: manifest.digest, state: 'Published image' })
+  const result = publication(mock)
 
-  const create = mock.calls.find((args) => args[2] === 'create')
+  assert.deepEqual(result, { digest: manifest.digest, state: 'Published image' })
+  const writes = mock.calls.filter((args) => args[2] === 'create')
+  assert.equal(writes.length, 1)
+  for (const architecture of architectures) assert.ok(writes[0].includes(`${release.image}@${children[architecture]}`))
+  assert.equal(mock.calls.filter((args) => args[4] === '--raw').length, 2)
+})
 
-  for (const architecture of architectures) assert.ok(create.includes(`${release.image}@${children[architecture]}`))
-  assert.equal(mock.calls.filter((args) => args[2] === 'create').length, 1)
+test('publication rejects source images with the wrong commit before writing', () => {
+  const mock = registry({ configRevision: 'another-commit' })
 
-  const invalidDigest = registry()
+  assert.throws(() => publication(mock), /does not match/)
+  assert.ok(!mock.calls.some((args) => args[2] === 'create'))
+})
 
-  assert.throws(() => publication(invalidDigest, { amd64: 'invalid' }), /Invalid image digest/)
-  assert.ok(!invalidDigest.calls.some((args) => args[2] === 'create'))
+test('publication rejects a final digest different from the created manifest', () => {
+  const mock = registry({ metadataDigest: digest('c') })
 
-  const wrongSource = registry({ configRevision: 'another-commit' })
-
-  assert.throws(() => publication(wrongSource), /does not match/)
-  assert.ok(!wrongSource.calls.some((args) => args[2] === 'create'))
-  assert.throws(() => publication(registry({ metadataDigest: digest('c') })), /Published digest does not match/)
+  assert.throws(() => publication(mock), /Published digest does not match/)
 })
 
 test('a retry recovers a manifest written before verification failed', () => {
@@ -217,18 +219,24 @@ test('an existing tag with a missing child is rejected and never overwritten', (
   const original = mock.run
   mock.run = (args) => {
     if (args[5] === '{{json .Image}}') throw new Error('failed fetching child: manifest unknown')
-    assert.ok(args[2] === 'create' || args[4] === '--raw')
     return original(args)
   }
   assert.throws(() => publication(mock), /failed fetching child/)
   assert.ok(!mock.calls.some((args) => args[2] === 'create'))
 })
 
-test('pinned manifest bytes must match the digest resolved from the tag', () => {
+test('existing manifest is fetched once and children are inspected by digest', () => {
   const mock = registry({ exists: true })
 
-  const original = mock.run
-  mock.run = (args) => (args[3].includes('@') && args[4] === '--raw' ? '{}' : original(args))
-  assert.throws(() => publication(mock), /mismatched manifest digest/)
-  assert.ok(!mock.calls.some((args) => args[2] === 'create'))
+  const result = inspectRelease(release, mock.run)
+
+  assert.equal(result, manifest.digest)
+  assert.equal(mock.calls.filter((args) => args[4] === '--raw').length, 1)
+  for (const architecture of architectures) {
+    assert.ok(
+      mock.calls.some(
+        (args) => args[3] === `${release.image}@${children[architecture]}` && args[5] === '{{json .Image}}'
+      )
+    )
+  }
 })
