@@ -6,15 +6,17 @@
     "node": "^22.14.0 || >=24.10.0"
   },
   "scripts": {
+    "format": "prettier --write .",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "semantic-release": "25.0.9",
     "@semantic-release/commit-analyzer": "13.0.1",
+    "@semantic-release/github": "12.0.10",
     "@semantic-release/release-notes-generator": "14.1.1",
-    "@semantic-release/github": "12.0.10"
+    "semantic-release": "25.0.9"
   },
   "devDependencies": {
+    "prettier": "3.9.10",
     "yaml": "2.9.1"
   }
 }
