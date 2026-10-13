@@ -1,0 +1,20 @@
+# Copy this file to .github/workflows/release.yml in your application repository.
+# Your local ci.yml must accept workflow_call.
+name: release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: ci
+    uses: elmanueh/github-workflows/.github/workflows/release.yml@v1
+    permissions:
+      contents: write
+      packages: write

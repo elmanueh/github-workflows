@@ -1,0 +1,12 @@
+# Copy this file to .github/workflows/release.yml in your application repository.
+name: release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  release:
+    uses: elmanueh/github-workflows/.github/workflows/release.yml@v1
+    permissions:
+      contents: write
+      packages: write
