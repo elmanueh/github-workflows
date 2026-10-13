@@ -1,4 +1,5 @@
 name: Standard release
+
 on:
   workflow_call:
     inputs:
@@ -6,96 +7,113 @@ on:
         description: Docker build context.
         type: string
         default: .
+
       dockerfile:
         description: Dockerfile path.
         type: string
         default: Dockerfile
+
     outputs:
       version:
-        description: 'Pipeline output: version'
+        description: Semantic release version.
         value: ${{ jobs.release.outputs.version }}
+
       tag:
-        description: 'Pipeline output: tag'
+        description: Git and Docker release tag.
         value: ${{ jobs.release.outputs.tag }}
+
       image-name:
-        description: 'Pipeline output: image-name'
+        description: Repository-derived GHCR image name.
         value: ${{ jobs.release.outputs.image-name }}
+
       digest:
-        description: 'Pipeline output: digest'
+        description: Architecture digest for build-image; verified manifest digest for publication.
         value: ${{ jobs.publish.outputs.digest }}
+
       published:
-        description: 'Pipeline output: published'
-        value: ${{ jobs.release.outputs.published }}
+        description: Whether publish-image confirmed a complete Docker release.
+        value: ${{ jobs.publish.outputs.published }}
+
 concurrency:
-  group: standard-release-${{ github.repository }}
+  group: release-actions-${{ github.repository }}
   cancel-in-progress: false
+
 permissions:
   contents: read
+
 jobs:
   release:
-    name: Publish semantic release
+    name: Create release
     runs-on: ubuntu-24.04
+
     permissions:
       contents: write
-      packages: write
+      packages: read
+
     outputs:
-      tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
-      labels: ${{ steps.release.outputs.labels }}
-      matrix: ${{ steps.release.outputs.matrix }}
-      architectures: ${{ steps.release.outputs.architectures }}
-      published: ${{ steps.release.outputs.published }}
+
+      tag: ${{ steps.release.outputs.tag }}
+
       image-name: ${{ steps.release.outputs.image-name }}
-    steps:
-      - name: Checkout complete history
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Prepare release
-        id: release
-        uses: elmanueh/github-workflows/.github/actions/prepare-release@v1
-        with:
-          matrix: '[{"arch":"amd64","runner":"ubuntu-24.04"},{"arch":"arm64","runner":"ubuntu-24.04-arm"}]'
-          token: ${{ secrets.GITHUB_TOKEN }}
-  build:
-    name: Build ${{ matrix.arch }} image
-    needs: release
-    if: ${{ needs.release.outputs.published == 'true' }}
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.release.outputs.matrix) }}
-    runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: read
-      packages: write
+
+      digest: ${{ steps.release.outputs.digest }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-      - name: Build architecture image
-        uses: elmanueh/github-workflows/.github/actions/build-image@v1
         with:
-          image-name: ${{ needs.release.outputs.image-name }}
-          architecture: ${{ matrix.arch }}
-          labels: ${{ needs.release.outputs.labels }}
+          fetch-depth: 0
+
+      - name: Create release
+        uses: elmanueh/release-actions@v1
+        with:
+          operation: create-release
+        id: release
+
+  build:
+    name: Build on ${{ matrix.runner }}
+    needs: release
+    runs-on: ${{ matrix.runner }}
+
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build image
+        uses: elmanueh/release-actions@v1
+        with:
+          operation: build-image
           context: ${{ inputs.context }}
           dockerfile: ${{ inputs.dockerfile }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+
   publish:
-    name: Publish multi-platform image
-    needs:
-      - release
-      - build
+    name: Publish image
+    needs: build
     runs-on: ubuntu-24.04
+
     permissions:
       packages: write
+
     outputs:
       digest: ${{ steps.publish.outputs.digest }}
+
+      published: ${{ steps.publish.outputs.published }}
+
     steps:
-      - name: Publish and verify image
-        id: publish
-        uses: elmanueh/github-workflows/.github/actions/publish-image@v1
+      - name: Publish image
+        uses: elmanueh/release-actions@v1
         with:
-          image-name: ${{ needs.release.outputs.image-name }}
-          tag: ${{ needs.release.outputs.tag }}
-          architectures: ${{ needs.release.outputs.architectures }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          operation: publish-image
+        id: publish

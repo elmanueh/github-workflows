@@ -12,15 +12,19 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version: "24"
           cache: npm
           cache-dependency-path: package-lock.json
+
       - name: Install release tools
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Check versioning rules
+
+      - name: Check versioning rules and public contract
         run: npm test
+
       - name: Validate GitHub Actions workflows
         uses: docker://rhysd/actionlint:1.7.12
         with:

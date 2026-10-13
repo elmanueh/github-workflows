@@ -1,16 +1,72 @@
-# Copy this file to .github/workflows/release.yml in your application repository.
-# Adapt these Docker paths and run the workflow from main.
 name: release
 
 on:
   workflow_dispatch:
 
+concurrency:
+  group: release-actions-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
   release:
-    uses: elmanueh/github-workflows/.github/workflows/release.yml@v1
+    name: Create release
+    runs-on: ubuntu-24.04
+
     permissions:
       contents: write
+      packages: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Create release
+        uses: elmanueh/release-actions@v1
+        with:
+          operation: create-release
+
+  build:
+    name: Build on ${{ matrix.runner }}
+    needs: release
+    runs-on: ${{ matrix.runner }}
+
+    permissions:
+      contents: read
       packages: write
-    with:
-      context: .
-      dockerfile: docker/Dockerfile
+
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build image
+        uses: elmanueh/release-actions@v1
+        with:
+          operation: build-image
+          context: .
+          dockerfile: docker/Dockerfile
+
+  publish:
+    name: Publish image
+    needs: build
+    runs-on: ubuntu-24.04
+
+    permissions:
+      packages: write
+
+    steps:
+      - name: Publish image
+        uses: elmanueh/release-actions@v1
+        with:
+          operation: publish-image

@@ -1,38 +1,67 @@
 import { appendFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import semanticRelease from 'semantic-release'
-import config from './release-config.mjs'
+import { generateNotes } from '@semantic-release/release-notes-generator'
+import { isolatedRelease } from './isolated-release.mjs'
+import { ensureGithubRelease } from './github-release.mjs'
+import { parserOpts } from './release-config.mjs'
 
-const branch = 'main'
-if (process.env.GITHUB_REF !== `refs/heads/${branch}`) {
-  throw new Error(`Run this release workflow from the ${branch} branch.`)
-}
-
+if (process.env.GITHUB_REF !== 'refs/heads/main') throw new Error('Run this release workflow from the main branch.')
+const cwd = process.cwd()
+const git = (args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
+const revision = git(['rev-parse', 'HEAD'])
+if (revision !== process.env.GITHUB_SHA) throw new Error('Checkout must use the commit that triggered this workflow.')
 const repositoryUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}.git`
-const result = await semanticRelease({ ...config, branches: [branch], repositoryUrl }, { cwd: process.cwd() })
-let tag = result?.nextRelease.gitTag
-let version = result?.nextRelease.version
-
-// Recover a release whose Docker build failed after its tag was created.
-if (!result) {
-  tag = execFileSync('git', ['tag', '--points-at', 'HEAD', '--list', 'v[0-9]*.[0-9]*.[0-9]*', '--sort=-v:refname'], {
-    encoding: 'utf8'
-  })
-    .trim()
+const result = await isolatedRelease({
+  gitDirectory: git(['rev-parse', '--absolute-git-dir']),
+  worktree: cwd,
+  env: process.env,
+  repositoryUrl
+})
+let tag = result?.nextRelease?.gitTag
+if (!tag) {
+  const candidates = git(['tag', '--points-at', 'HEAD', '--list', 'v[0-9]*.[0-9]*.[0-9]*', '--sort=-v:refname'])
     .split('\n')
-    .find((value) => /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value))
-  if (tag) {
-    execFileSync('gh', ['release', 'view', tag, '--json', 'tagName'], {
-      env: { ...process.env, GH_TOKEN: process.env.GITHUB_TOKEN },
-      stdio: 'pipe'
-    })
-    version = tag.slice(1)
-  }
+    .filter((value) => /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value))
+  if (candidates.length > 1)
+    throw new Error('Multiple stable release tags point to this commit; recovery is ambiguous.')
+  tag = candidates[0]
 }
-
-if (tag && !/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(tag)) {
-  throw new Error(`Invalid stable release tag: ${tag}`)
+if (tag) {
+  if (!/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(tag)) throw new Error('Invalid stable release tag.')
+  await ensureGithubRelease({
+    repository: process.env.GITHUB_REPOSITORY,
+    tag,
+    revision,
+    tagRevision: git(['rev-parse', `${tag}^{commit}`]),
+    notes: async () => {
+      if (result?.nextRelease?.notes) return result.nextRelease.notes
+      const parent = git(['rev-list', '--parents', '-n', '1', tag]).split(' ')[1]
+      const previous = parent
+        ? git(['tag', '--merged', parent, '--list', 'v[0-9]*.[0-9]*.[0-9]*', '--sort=-v:refname'])
+            .split('\n')
+            .find((value) => /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value))
+        : undefined
+      const parts = git(['log', previous ? `${previous}..${tag}` : tag, '--format=%H%x00%B%x00']).split('\0')
+      const commits = []
+      for (let index = 0; index + 1 < parts.length; index += 2) {
+        if (parts[index].trim()) commits.push({ hash: parts[index].trim(), message: parts[index + 1].trim() })
+      }
+      return generateNotes(
+        { parserOpts },
+        {
+          cwd,
+          commits,
+          lastRelease: previous ? { gitTag: previous } : {},
+          nextRelease: { gitTag: tag, version: tag.slice(1), gitHead: revision },
+          options: { repositoryUrl },
+          logger: { log() {} }
+        }
+      )
+    }
+  })
 }
-
-appendFileSync(process.env.GITHUB_OUTPUT, `published=${Boolean(tag)}\ntag=${tag || ''}\nversion=${version || ''}\n`)
-if (!tag) console.log('No releasable changes; Docker publication will be skipped.')
+appendFileSync(
+  process.env.GITHUB_OUTPUT,
+  `release-ready=${Boolean(tag)}\ntag=${tag || ''}\nversion=${tag?.slice(1) || ''}\n`
+)
+if (!tag) console.log('No release needed; Docker publication will be skipped.')

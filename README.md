@@ -1,72 +1,86 @@
-# github-workflows
+# release-actions
 
-A reusable GitHub Actions workflow that creates a new version of your application, its Git tag and GitHub release, and publishes a Docker image with the same version to GitHub Container Registry (GHCR).
+Three operations in one GitHub Action: create a semantic release, build native Docker images, and publish one verified multi-architecture image.
 
-For example, version `1.2.3` produces:
-
-- The Git tag `v1.2.3`.
-- A GitHub release with release notes.
-- The image `ghcr.io/your-owner/your-repository:v1.2.3`, available for Linux `amd64` and `arm64`.
-
-## How it works
-
-1. Semantic-release analyzes commits since the previous release and calculates the next version.
-2. It creates the Git tag and GitHub release in your repository.
-3. The workflow builds a Docker image for each architecture in parallel on native runners.
-4. It publishes a single Docker tag for both architectures and verifies the published digest and platforms.
-
-Commit messages determine the version change:
-
-| Example commit                                         | Version change           |
-| ------------------------------------------------------ | ------------------------ |
-| `fix: correct a bug`                                   | Patch: `1.2.3` → `1.2.4` |
-| `feat: add a feature`                                  | Minor: `1.2.3` → `1.3.0` |
-| `feat!: change the API` or a `BREAKING CHANGE:` footer | Major: `1.2.3` → `2.0.0` |
-| `docs: update documentation`, `chore: ...`             | No new version           |
-
-If no commits require a new version, publication is skipped. If Docker fails after the release is created, run the workflow again at the same commit to complete publication. An existing image release tag is never overwritten.
-
-## How to use it
-
-Your application needs a GitHub repository with a `main` branch and a `Dockerfile` that supports Linux `amd64` and `arm64`. Any language or package manager can be used; semantic-release is configured and installed from this project.
-
-Create `.github/workflows/release.yml` in your application repository:
+Every call uses the same reference:
 
 ```yaml
-name: release
-
-on:
-  workflow_dispatch:
-
-jobs:
-  release:
-    uses: elmanueh/github-workflows/.github/workflows/release.yml@v1
-    permissions:
-      contents: write
-      packages: write
+uses: elmanueh/release-actions@v1
+with:
+  operation: create-release
 ```
 
-On GitHub, open **Actions → release → Run workflow** and select the `main` branch. Repository settings must allow reusable workflows and release creation. The workflow uses GitHub's automatic `GITHUB_TOKEN`; no personal access token is needed.
+## Quick start
 
-By default, it uses the root `Dockerfile`. It always publishes to `ghcr.io/<owner>/<repository>` in lowercase, from `main`, for Linux `amd64` and `arm64`. Only the Docker build context and Dockerfile path are configurable. After a successful run, you will find the release under **Releases**, the image under **Packages**, and its reference and digest in the workflow run summary.
+1. Your application needs a `main` branch and a Dockerfile that supports Linux `amd64` and `arm64`.
+2. Copy [examples/release.yml](examples/release.yml) to `.github/workflows/release.yml`, or use [release-with-ci.yml](examples/release-with-ci.yml) to run your CI first.
+3. Commit a release change such as `feat: add a feature`.
+4. Open **Actions → release → Run workflow** in GitHub and select `main`.
 
-Download the image with:
+The complete examples include permissions, concurrency and job dependencies. No personal access token or application-specific semantic-release configuration is needed.
+
+## Operations
+
+| Operation        | What it does                                                                              |
+| ---------------- | ----------------------------------------------------------------------------------------- |
+| `create-release` | Analyze commits, calculate the version, create or recover its Git tag and GitHub release. |
+| `build-image`    | Detect the runner architecture and build its Docker image using the release version.      |
+| `publish-image`  | Combine both images, publish the version tag and verify the resulting image.              |
+
+Version, release state and digests are shared automatically through internal artifacts. You do not pass tags, architecture inputs or outputs between jobs.
+
+Both native builds run in parallel using one job definition:
+
+```yaml
+build:
+  needs: release
+  strategy:
+    fail-fast: false
+    matrix:
+      runner: [ubuntu-24.04, ubuntu-24.04-arm]
+  runs-on: ${{ matrix.runner }}
+  permissions:
+    contents: read
+    packages: write
+  steps:
+    - uses: actions/checkout@v7
+    - uses: elmanueh/release-actions@v1
+      with:
+        operation: build-image
+```
+
+The full example also defines the `release` and `publish` jobs. `publish` uses `needs: build` to wait for both architectures. No emulation or auxiliary workflow is required.
+
+## Results
+
+For version `1.2.3`, you get Git tag `v1.2.3`, a GitHub release with notes, and one Docker tag supporting both Linux architectures:
 
 ```sh
 docker pull ghcr.io/your-owner/your-repository:v1.2.3
 ```
 
-For private images, authenticate to GHCR first using an account with access to the package.
+The run summary includes the release link and verified image digest. Authenticate to GHCR before pulling a private image.
 
-## Examples and configuration
+## Versioning and retries
 
-- [Basic usage](examples/release.yml).
-- [Run your application's CI before publishing](examples/release-with-ci.yml).
-- [Customize the Docker build context and Dockerfile](examples/release-custom.yml).
-- [Options, outputs and caching](docs/configuration.md).
+| Commit                                                 | Version change |
+| ------------------------------------------------------ | -------------- |
+| `fix: correct a bug`                                   | Patch          |
+| `feat: add a feature`                                  | Minor          |
+| `feat!: change the API` or a `BREAKING CHANGE:` footer | Major          |
+| `docs: ...`, `chore: ...`                              | None           |
 
-The `@v1` reference receives compatible improvements without changes to each application's workflow. You can also pin a commit SHA to adopt updates explicitly.
+When no release is needed, later operations finish without building or publishing. The jobs still start, but heavy work is skipped. Matching published images are verified and reported as **Already published**. Incompatible existing tags are rejected.
 
-This workflow publishes releases and images. It does not deploy containers to a server or update version fields in your application's files.
+Retry at the same commit after a partial release or Docker failure. Internal artifacts are retained for one day; rerun all jobs if they have expired. The action does not deploy containers or change application version files.
 
-To maintain or publish the pipeline itself, see the [maintenance guide](docs/maintenance.md).
+## Examples and details
+
+- [Complete workflow](examples/release.yml).
+- [Run application CI first](examples/release-with-ci.yml).
+- [Custom Dockerfile path](examples/release-custom.yml).
+- [Configuration and advanced outputs](docs/configuration.md).
+- [Troubleshooting](docs/troubleshooting.md).
+- [Maintenance and compatibility](docs/maintenance.md).
+
+The release branch, image name and supported architectures are fixed. `@v1` receives compatible updates; pin an exact version or commit SHA to control adoption.

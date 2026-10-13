@@ -1,42 +1,57 @@
 # Configuration
 
-Only two inputs are available. Both are optional strings. Add them to the calling job's `with` block, as shown in the [custom Docker example](../examples/release-custom.yml).
+Use `elmanueh/release-actions@v1` with one of the three operations. Copy the complete examples to preserve job dependencies and permissions.
 
-| Input        | Default      | Purpose                                          |
-| ------------ | ------------ | ------------------------------------------------ |
-| `context`    | `.`          | Docker build context.                            |
-| `dockerfile` | `Dockerfile` | Dockerfile path relative to the repository root. |
+## Inputs
 
-## Fixed behavior
+| Input        | Default               | Purpose                                                        |
+| ------------ | --------------------- | -------------------------------------------------------------- |
+| `operation`  | Required              | `create-release`, `build-image` or `publish-image`.            |
+| `context`    | `.`                   | Docker build context for `build-image`.                        |
+| `dockerfile` | `Dockerfile`          | Dockerfile path relative to repository root for `build-image`. |
+| `token`      | `${{ github.token }}` | GitHub token. Normally leave unset.                            |
 
-- Releases are created from `main` only.
-- The image name is `ghcr.io/<owner>/<repository>`, using the calling repository in lowercase.
-- Every image supports Linux `amd64` and `arm64`.
-- Builds run in parallel on `ubuntu-24.04` and `ubuntu-24.04-arm`, respectively.
-- Git and Docker tags use `v<version>`, calculated by semantic-release.
-- The cache prefix is `docker`.
+There are no architecture, release tag, matrix, image name or cache-prefix inputs. The action detects the native architecture and retrieves release data internally.
 
-These settings cannot be overridden by the application. Its Dockerfile, base images and dependencies must support both architectures.
+## Workflow requirements
 
-## Outputs
+| Job     | Runner                                          | Permissions                         | Dependency                    |
+| ------- | ----------------------------------------------- | ----------------------------------- | ----------------------------- |
+| Release | `ubuntu-24.04`                                  | `contents: write`, `packages: read` | Application CI, when present. |
+| Build   | Matrix of `ubuntu-24.04` and `ubuntu-24.04-arm` | `contents: read`, `packages: write` | Release.                      |
+| Publish | `ubuntu-24.04`                                  | `packages: write`                   | Both builds.                  |
 
-Use `needs.release.outputs.<name>` from a subsequent job if the calling job is named `release`.
+Check out complete history in the release job (`fetch-depth: 0`) and source code in the build job. Publish needs no checkout. All operations must run in the same workflow run from `main` at the same source commit.
 
-| Output       | Value                                                                                        |
-| ------------ | -------------------------------------------------------------------------------------------- |
-| `version`    | Semantic version, for example `1.2.3`.                                                       |
-| `tag`        | Release and image tag, for example `v1.2.3`.                                                 |
-| `image-name` | GHCR image name without a tag.                                                               |
-| `digest`     | Verified digest of the published multi-platform image.                                       |
-| `published`  | `true` when a release was created or recovered; `false` when there is no release to publish. |
+Keep `release-actions-${{ github.repository }}` concurrency with `cancel-in-progress: false`. The examples use `fail-fast: false` for builds so a failed architecture does not cancel the other one.
 
-`published` indicates that a release exists to process. To confirm Docker publication, check that the workflow succeeded and `digest` has a value.
+## Internal data
 
-## Caching
+`create-release` uploads an internal release context, including when there is nothing to publish. Later operations retrieve it automatically and validate the repository, commit and workflow run. Build records are also bound to the release and native architecture.
 
-Docker caches build data to speed up subsequent builds. Each architecture has its own cache: `docker-release-amd64` and `docker-release-arm64`. Both can also read `docker-ci`. Caches belong to each application's repository.
+Applications do not need to define outputs or access these artifacts. If no release is needed or its image is already published, architecture builds are skipped internally. Publish verifies existing images again before reporting success.
 
-Your application's Docker CI build can use:
+Artifacts are retained for one day. Rerun all jobs at the same commit if context or digest artifacts expired. A partial rerun of failed jobs can reuse the other architecture's record within that period.
+
+## Advanced outputs
+
+Give the action step an `id` only if you need its outputs for another purpose.
+
+| Output       | Value                                                                                                           |
+| ------------ | --------------------------------------------------------------------------------------------------------------- |
+| `version`    | Semantic release version when a release exists.                                                                 |
+| `tag`        | Git and Docker release tag.                                                                                     |
+| `image-name` | Repository-derived GHCR image name.                                                                             |
+| `digest`     | Architecture digest after `build-image`; verified manifest digest after publication or an existing image check. |
+| `published`  | `true` only when `publish-image` confirms a complete Docker release; otherwise `false`.                         |
+
+These outputs are optional. The standard examples do not consume them.
+
+## Cache reuse
+
+Each native architecture keeps its own cache: `docker-release-amd64` or `docker-release-arm64`. Both can read `docker-ci`. Caches belong to the application repository.
+
+An amd64 Docker CI build can use:
 
 ```yaml
 cache-from: |
@@ -45,4 +60,6 @@ cache-from: |
 cache-to: type=gha,scope=docker-ci,mode=max
 ```
 
-Digest artifacts are isolated by workflow run and retained for one day to support rerunning failed jobs.
+## Alternative reusable workflow
+
+`.github/workflows/release.yml` remains a wrapper that coordinates the same three operations. It accepts optional `context` and `dockerfile` inputs and exposes result outputs. Direct operation calls are the primary integration.

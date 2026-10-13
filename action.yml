@@ -1,0 +1,222 @@
+name: Release Actions
+description: Create releases, build native architecture images and publish a verified multi-platform Docker tag.
+
+inputs:
+  operation:
+    description: 'Operation: create-release, build-image or publish-image.'
+    required: true
+
+  token:
+    description: GitHub token. Normally use the automatic workflow token.
+    default: ${{ github.token }}
+
+  context:
+    description: Docker build context (build-image only).
+    default: .
+
+  dockerfile:
+    description: Dockerfile path relative to repository root (build-image only).
+    default: Dockerfile
+
+outputs:
+  version:
+    description: Semantic release version.
+    value: ${{ steps.release.outputs.version || steps.context.outputs.version }}
+
+  tag:
+    description: Git and Docker release tag.
+    value: ${{ steps.release.outputs.tag || steps.context.outputs.tag }}
+
+  image-name:
+    description: Repository-derived GHCR image name.
+    value: ${{ steps.validate.outputs.image-name }}
+
+  digest:
+    description: Architecture digest for build-image; verified manifest digest for publication.
+    value: ${{ steps.finish.outputs.digest }}
+
+  published:
+    description: Whether publish-image confirmed a complete Docker release.
+    value: ${{ steps.finish.outputs.published }}
+
+runs:
+  using: composite
+
+  steps:
+    - name: Validate operation and native runner
+      id: validate
+      shell: bash
+      env:
+        ACTION_DIRECTORY: ${{ github.action_path }}
+        OPERATION: ${{ inputs.operation }}
+      run: |
+        node "$ACTION_DIRECTORY/src/action-inputs.mjs"
+
+    - name: Download internal release context
+      uses: actions/download-artifact@v8
+      with:
+        name: release-context
+        path: ${{ runner.temp }}/release-actions
+      if: ${{ inputs.operation != 'create-release' }}
+
+    - name: Validate internal release context
+      id: context
+      shell: bash
+      env:
+        ACTION_DIRECTORY: ${{ github.action_path }}
+        OPERATION: ${{ inputs.operation }}
+      run: |
+        node "$ACTION_DIRECTORY/src/release/context.mjs"
+      if: ${{ inputs.operation != 'create-release' }}
+
+    - name: Set up release runtime
+      uses: actions/setup-node@v7
+      with:
+        node-version: '24'
+        package-manager-cache: false
+      if: ${{ inputs.operation == 'create-release' }}
+
+    - name: Install centralized release tools
+      shell: bash
+      env:
+        ACTION_DIRECTORY: ${{ github.action_path }}
+      run: |
+        npm ci --prefix "$ACTION_DIRECTORY" --omit=dev --ignore-scripts --no-audit --no-fund
+      if: ${{ inputs.operation == 'create-release' }}
+
+    - name: Create or recover version and GitHub release
+      id: release
+      shell: bash
+      env:
+        ACTION_DIRECTORY: ${{ github.action_path }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        node "$ACTION_DIRECTORY/src/release/release.mjs"
+      if: ${{ inputs.operation == 'create-release' }}
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+      if:
+        ${{ (inputs.operation == 'create-release' && steps.release.outputs.release-ready == 'true') || (inputs.operation ==
+        'build-image' && steps.context.outputs.should-build == 'true') || (inputs.operation == 'publish-image' &&
+        steps.context.outputs.has-release == 'true') }}
+
+    - name: Log in to GHCR
+      uses: docker/login-action@v4
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.token }}
+      if:
+        ${{ (inputs.operation == 'create-release' && steps.release.outputs.release-ready == 'true') || (inputs.operation ==
+        'build-image' && steps.context.outputs.should-build == 'true') || (inputs.operation == 'publish-image' &&
+        steps.context.outputs.has-release == 'true') }}
+
+    - name: Check for a matching published image
+      id: check
+      shell: bash
+      env:
+        ACTION_DIRECTORY: ${{ github.action_path }}
+        IMAGE_NAME: ${{ steps.validate.outputs.image-name }}
+        RELEASE_TAG: ${{ steps.release.outputs.tag || steps.context.outputs.tag }}
+      run: |
+        node "$ACTION_DIRECTORY/src/docker/check-release.mjs"
+      if:
+        ${{ (inputs.operation == 'create-release' && steps.release.outputs.release-ready == 'true') || (inputs.operation ==
+        'publish-image' && steps.context.outputs.has-release == 'true') }}
+
+    - name: Save internal release context
+      shell: bash
+      env:
+        ACTION_DIRECTORY: ${{ github.action_path }}
+        RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        IMAGE_DIGEST: ${{ steps.check.outputs.digest }}
+      run: |
+        node "$ACTION_DIRECTORY/src/release/context.mjs" save
+      if: ${{ inputs.operation == 'create-release' }}
+
+    - name: Share internal release context
+      uses: actions/upload-artifact@v7
+      with:
+        name: release-context
+        path: ${{ runner.temp }}/release-actions/release.json
+        if-no-files-found: error
+        retention-days: 1
+        overwrite: true
+      if: ${{ inputs.operation == 'create-release' }}
+
+    - name: Generate image metadata
+      id: metadata
+      shell: bash
+      env:
+        ACTION_DIRECTORY: ${{ github.action_path }}
+        IMAGE_NAME: ${{ steps.validate.outputs.image-name }}
+        RELEASE_TAG: ${{ steps.release.outputs.tag || steps.context.outputs.tag }}
+      run: |
+        node "$ACTION_DIRECTORY/src/docker/metadata.mjs"
+      if: ${{ inputs.operation == 'build-image' && steps.context.outputs.should-build == 'true' }}
+
+    - name: Build native architecture image
+      id: build
+      uses: docker/build-push-action@v7
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.dockerfile }}
+        platforms: ${{ steps.validate.outputs.platform }}
+        labels: ${{ steps.metadata.outputs.labels }}
+        outputs: type=image,name=${{ steps.validate.outputs.image-name }},push-by-digest=true,name-canonical=true,push=true
+        cache-from: |
+          type=gha,scope=docker-release-${{ steps.validate.outputs.architecture }}
+          type=gha,scope=docker-ci
+        cache-to: type=gha,scope=docker-release-${{ steps.validate.outputs.architecture }},mode=max
+      if: ${{ inputs.operation == 'build-image' && steps.context.outputs.should-build == 'true' }}
+
+    - name: Save architecture build record
+      shell: bash
+      env:
+        ACTION_DIRECTORY: ${{ github.action_path }}
+        ARCHITECTURE: ${{ steps.validate.outputs.architecture }}
+        IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+      run: |
+        node "$ACTION_DIRECTORY/src/docker/save-build.mjs"
+      if: ${{ inputs.operation == 'build-image' && steps.context.outputs.should-build == 'true' }}
+
+    - name: Share architecture digest
+      uses: actions/upload-artifact@v7
+      with:
+        name: image-digest-${{ steps.validate.outputs.architecture }}
+        path: ${{ runner.temp }}/release-actions/digests/${{ steps.validate.outputs.architecture }}.json
+        if-no-files-found: error
+        retention-days: 1
+        overwrite: true
+      if: ${{ inputs.operation == 'build-image' && steps.context.outputs.should-build == 'true' }}
+
+    - name: Download architecture digests
+      uses: actions/download-artifact@v8
+      with:
+        pattern: image-digest-*
+        path: ${{ runner.temp }}/release-actions/digests
+        merge-multiple: true
+      if: ${{ inputs.operation == 'publish-image' && steps.check.outputs.should-publish == 'true' }}
+
+    - name: Publish and verify multi-platform image
+      id: publish
+      shell: bash
+      env:
+        ACTION_DIRECTORY: ${{ github.action_path }}
+        IMAGE_NAME: ${{ steps.validate.outputs.image-name }}
+        RELEASE_TAG: ${{ steps.release.outputs.tag || steps.context.outputs.tag }}
+      run: |
+        node "$ACTION_DIRECTORY/src/docker/publish.mjs"
+      if: ${{ inputs.operation == 'publish-image' && steps.check.outputs.should-publish == 'true' }}
+
+    - name: Return operation result
+      id: finish
+      shell: bash
+      env:
+        ACTION_DIRECTORY: ${{ github.action_path }}
+        OPERATION: ${{ inputs.operation }}
+        RELEASE_TAG: ${{ steps.release.outputs.tag || steps.context.outputs.tag }}
+        IMAGE_DIGEST: ${{ steps.publish.outputs.digest || steps.check.outputs.digest || steps.build.outputs.digest }}
+      run: |
+        node "$ACTION_DIRECTORY/src/docker/finish.mjs"
