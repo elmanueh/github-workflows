@@ -120,6 +120,9 @@ test('application dryRun, extensions and executable config cannot affect central
           { ...context, logger: { log() {}, success() {}, error() {}, warn() {} } },
           options
         )
+        // Execute semantic-release's real prepare pipeline, which reads HEAD
+        // without forwarding context.env to Git.
+        await loaded.plugins.prepare({ ...context, nextRelease: { gitHead: head } })
         observed = {
           config: JSON.parse(readFileSync(join(context.cwd, '.releaserc.json'), 'utf8')),
           options: loaded.options,
