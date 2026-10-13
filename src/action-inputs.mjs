@@ -1,5 +1,6 @@
 import { appendFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
+import { join, relative } from 'node:path'
 import { architectures } from './platforms.mjs'
 
 export function validateInputs({
@@ -29,6 +30,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   })
   appendFileSync(
     process.env.GITHUB_OUTPUT,
-    `image-name=${image}\narchitecture=${architecture}\nplatform=linux/${architecture}\n`
+    `image-name=${image}\narchitecture=${architecture}\nplatform=linux/${architecture}\n` +
+      `package-json-file=${relative(process.env.GITHUB_WORKSPACE, join(process.env.ACTION_DIRECTORY, 'package.json'))}\n`
   )
 }

@@ -35,11 +35,13 @@ Serialize all writers with `release-actions-<repository>` and do not cancel an a
 ## Validation
 
 ```sh
-npm ci --ignore-scripts --no-audit --no-fund
-npm test
+pnpm install --frozen-lockfile --ignore-scripts
+pnpm test
 ```
 
 Tests cover configuration isolation, release recovery, native operation inputs, context binding, registry failures, broken manifests and idempotent publication. CI also validates workflows with actionlint.
+
+The pnpm version is pinned in `package.json`. Use `pnpm format` to format the project. CI and the action install from `pnpm-lock.yaml` with a frozen lockfile; the action reads its own package manifest rather than the application's package manager settings.
 
 Before updating `v1`, test a real application run with both native runners, no-release skipping, build/publication retries and an already published release. Local tests simulate API and registry responses.
 

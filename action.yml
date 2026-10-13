@@ -76,12 +76,18 @@ runs:
         package-manager-cache: false
       if: ${{ inputs.operation == 'create-release' }}
 
-    - name: Install centralized release tools
+    - name: Set up centralized package manager
+      uses: pnpm/action-setup@v6
+      with:
+        package_json_file: ${{ steps.validate.outputs.package-json-file }}
+      if: ${{ inputs.operation == 'create-release' }}
+
+    - name: Install release dependencies
       shell: bash
       env:
         ACTION_DIRECTORY: ${{ github.action_path }}
       run: |
-        npm ci --prefix "$ACTION_DIRECTORY" --omit=dev --ignore-scripts --no-audit --no-fund
+        pnpm --dir "$ACTION_DIRECTORY" install --prod --frozen-lockfile --ignore-scripts
       if: ${{ inputs.operation == 'create-release' }}
 
     - name: Create or recover version and GitHub release

@@ -2,6 +2,7 @@
   "name": "standard-release-tools",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@12.6.0",
   "engines": {
     "node": "^22.14.0 || >=24.10.0"
   },
