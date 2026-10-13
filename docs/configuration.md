@@ -2,6 +2,12 @@
 
 Start from [release-only.yml](../examples/release-only.yml) or [release-with-docker.yml](../examples/release-with-docker.yml). Both run manually from `main`.
 
+## Action versions
+
+Use `elmanueh/release-actions@v1` to receive compatible updates. Pin an exact tag, such as `@v1.0.0`, or a full commit SHA to keep a fixed version. Breaking updates use a new major reference, such as `@v2`; applications on `@v1` keep their existing major version.
+
+This repository publishes action versions after successful CI on `main`. Each publication creates an exact version tag and a GitHub release, then updates its major tag. Major tags have no separate GitHub release.
+
 ## Inputs
 
 | Input        | Default               | Description                                                                        |

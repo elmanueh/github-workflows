@@ -57,16 +57,31 @@ test('complete example uses a native runner matrix without passing version or st
   }
 })
 
-test('optional reusable workflow retains Docker path inputs and result outputs', () => {
-  const workflow = read('.github/workflows/release.yml')
+test('CI validates pushes and pull requests and can be reused without publishing', () => {
+  const workflow = read('.github/workflows/ci.yml')
 
+  assert.ok(Object.hasOwn(workflow.on, 'pull_request'))
+  assert.ok(Object.hasOwn(workflow.on, 'workflow_call'))
+  assert.deepEqual(workflow.on.push.branches, ['**'])
+  assert.deepEqual(Object.keys(workflow.jobs), ['release-tools'])
+  assert.deepEqual(workflow.permissions, { contents: 'read' })
+})
+
+test('client reusable release retains its inputs, outputs and Docker workflow', () => {
+  const workflow = read('.github/workflows/release-application.yml')
   const contract = workflow.on.workflow_call
 
+  assert.deepEqual(Object.keys(workflow.on), ['workflow_call'])
   for (const name of ['context', 'dockerfile']) assert.equal(contract.inputs[name].type, 'string')
-
   for (const name of ['version', 'tag', 'image-name', 'digest', 'published']) assert.ok(contract.outputs[name])
-  assert.equal(workflow.jobs.build.steps[1].uses, 'elmanueh/release-actions@v1')
-  assert.equal(workflow.jobs.build.steps[1].with.operation, 'build-image')
+  assert.equal(workflow.jobs.release.steps[1].uses, 'elmanueh/release-actions@v1')
+  assert.equal(workflow.jobs.release.steps[1].with.operation, 'create-release')
+  assert.equal(workflow.jobs.build.needs, 'release')
+  assert.deepEqual(workflow.jobs.build.strategy.matrix.runner, ['ubuntu-24.04', 'ubuntu-24.04-arm'])
+  assert.equal(workflow.jobs.build.steps[1].with.context, '${{ inputs.context }}')
+  assert.equal(workflow.jobs.build.steps[1].with.dockerfile, '${{ inputs.dockerfile }}')
+  assert.equal(workflow.jobs.publish.needs, 'build')
+  assert.equal(workflow.jobs.publish.steps[0].with.operation, 'publish-image')
 })
 
 test('Docker preflight belongs to builds and publication accepts an existing image without build records', () => {
@@ -110,4 +125,22 @@ test('release-only example requires neither Docker jobs nor package permissions'
   assert.deepEqual(job.permissions, { contents: 'write' })
   assert.equal(job.steps[0].with['fetch-depth'], 0)
   assert.equal(job.steps[1].with.operation, 'create-release')
+})
+
+test('action publication waits for validation and runs only on manual main dispatches', () => {
+  const workflow = read('.github/workflows/release.yml')
+  const publish = workflow.jobs.publish
+  const release = publish.steps.find((step) => step.id === 'release')
+  const alias = publish.steps.find((step) => step.env?.RELEASE_TAG)
+
+  assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch'])
+  assert.equal(workflow.jobs.ci.uses, './.github/workflows/ci.yml')
+  assert.equal(workflow.jobs.ci.if, "${{ github.ref == 'refs/heads/main' }}")
+  assert.equal(publish.needs, 'ci')
+  assert.deepEqual(publish.permissions, { contents: 'write' })
+  assert.equal(workflow.concurrency['cancel-in-progress'], false)
+  assert.equal(publish.steps[0].with['fetch-depth'], 0)
+  assert.equal(release.uses, './')
+  assert.equal(release.with.operation, 'create-release')
+  assert.equal(alias.if, "${{ steps.release.outputs.tag != '' }}")
 })

@@ -1,14 +1,17 @@
-name: Validate shared workflows
+name: ci
 
 on:
   push:
+    branches: ['**']
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
 
 jobs:
   release-tools:
+    name: Validate action
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7

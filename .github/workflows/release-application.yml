@@ -1,0 +1,118 @@
+name: release-application
+
+on:
+  workflow_call:
+    inputs:
+      context:
+        description: Docker build context.
+        type: string
+        default: .
+
+      dockerfile:
+        description: Dockerfile path.
+        type: string
+        default: Dockerfile
+
+    outputs:
+      version:
+        description: Semantic release version.
+        value: ${{ jobs.release.outputs.version }}
+
+      tag:
+        description: Git and Docker release tag.
+        value: ${{ jobs.release.outputs.tag }}
+
+      image-name:
+        description: Repository-derived GHCR image name.
+        value: ${{ jobs.release.outputs.image-name }}
+
+      digest:
+        description: Architecture digest for build-image; verified manifest digest for publication.
+        value: ${{ jobs.publish.outputs.digest }}
+
+      published:
+        description: Whether publish-image confirmed a complete Docker release.
+        value: ${{ jobs.publish.outputs.published }}
+
+concurrency:
+  group: release-actions-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Create release
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: write
+
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+
+      tag: ${{ steps.release.outputs.tag }}
+
+      image-name: ${{ steps.release.outputs.image-name }}
+
+      digest: ${{ steps.release.outputs.digest }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Create release
+        uses: elmanueh/release-actions@v1
+        with:
+          operation: create-release
+        id: release
+
+  build:
+    name: Build on ${{ matrix.runner }}
+    needs: release
+    runs-on: ${{ matrix.runner }}
+
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build image
+        uses: elmanueh/release-actions@v1
+        with:
+          operation: build-image
+          context: ${{ inputs.context }}
+          dockerfile: ${{ inputs.dockerfile }}
+
+  publish:
+    name: Publish image
+    needs: build
+    runs-on: ubuntu-24.04
+
+    permissions:
+      packages: write
+
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+
+      published: ${{ steps.publish.outputs.published }}
+
+    steps:
+      - name: Publish image
+        uses: elmanueh/release-actions@v1
+        with:
+          operation: publish-image
+        id: publish
