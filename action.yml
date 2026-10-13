@@ -94,41 +94,11 @@ runs:
         node "$ACTION_DIRECTORY/src/release/release.mjs"
       if: ${{ inputs.operation == 'create-release' }}
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v4
-      if:
-        ${{ (inputs.operation == 'create-release' && steps.release.outputs.release-ready == 'true') || (inputs.operation ==
-        'build-image' && steps.context.outputs.should-build == 'true') || (inputs.operation == 'publish-image' &&
-        steps.context.outputs.has-release == 'true') }}
-
-    - name: Log in to GHCR
-      uses: docker/login-action@v4
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ inputs.token }}
-      if:
-        ${{ (inputs.operation == 'create-release' && steps.release.outputs.release-ready == 'true') || (inputs.operation ==
-        'build-image' && steps.context.outputs.should-build == 'true') || (inputs.operation == 'publish-image' &&
-        steps.context.outputs.has-release == 'true') }}
-
-    - name: Check for a matching published image
-      id: check
-      shell: bash
-      env:
-        ACTION_DIRECTORY: ${{ github.action_path }}
-        IMAGE_NAME: ${{ steps.validate.outputs.image-name }}
-        RELEASE_TAG: ${{ steps.release.outputs.tag || steps.context.outputs.tag }}
-      run: |
-        node "$ACTION_DIRECTORY/src/docker/check-release.mjs"
-      if: ${{ inputs.operation == 'create-release' && steps.release.outputs.release-ready == 'true' }}
-
     - name: Save internal release context
       shell: bash
       env:
         ACTION_DIRECTORY: ${{ github.action_path }}
         RELEASE_TAG: ${{ steps.release.outputs.tag }}
-        IMAGE_DIGEST: ${{ steps.check.outputs.digest }}
       run: |
         node "$ACTION_DIRECTORY/src/release/context.mjs" save
       if: ${{ inputs.operation == 'create-release' }}
@@ -143,6 +113,29 @@ runs:
         overwrite: true
       if: ${{ inputs.operation == 'create-release' }}
 
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+      if: ${{ inputs.operation != 'create-release' && steps.context.outputs.has-release == 'true' }}
+
+    - name: Log in to GHCR
+      uses: docker/login-action@v4
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.token }}
+      if: ${{ inputs.operation != 'create-release' && steps.context.outputs.has-release == 'true' }}
+
+    - name: Check for a matching published image
+      id: check
+      shell: bash
+      env:
+        ACTION_DIRECTORY: ${{ github.action_path }}
+        IMAGE_NAME: ${{ steps.validate.outputs.image-name }}
+        RELEASE_TAG: ${{ steps.release.outputs.tag || steps.context.outputs.tag }}
+      run: |
+        node "$ACTION_DIRECTORY/src/docker/check-release.mjs"
+      if: ${{ inputs.operation == 'build-image' && steps.context.outputs.has-release == 'true' }}
+
     - name: Generate image metadata
       id: metadata
       shell: bash
@@ -152,7 +145,7 @@ runs:
         RELEASE_TAG: ${{ steps.release.outputs.tag || steps.context.outputs.tag }}
       run: |
         node "$ACTION_DIRECTORY/src/docker/metadata.mjs"
-      if: ${{ inputs.operation == 'build-image' && steps.context.outputs.should-build == 'true' }}
+      if: ${{ inputs.operation == 'build-image' && steps.check.outputs.should-build == 'true' }}
 
     - name: Build native architecture image
       id: build
@@ -167,7 +160,7 @@ runs:
           type=gha,scope=docker-release-${{ steps.validate.outputs.architecture }}
           type=gha,scope=docker-ci
         cache-to: type=gha,scope=docker-release-${{ steps.validate.outputs.architecture }},mode=max
-      if: ${{ inputs.operation == 'build-image' && steps.context.outputs.should-build == 'true' }}
+      if: ${{ inputs.operation == 'build-image' && steps.check.outputs.should-build == 'true' }}
 
     - name: Save architecture build record
       shell: bash
@@ -177,7 +170,7 @@ runs:
         IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
       run: |
         node "$ACTION_DIRECTORY/src/docker/save-build.mjs"
-      if: ${{ inputs.operation == 'build-image' && steps.context.outputs.should-build == 'true' }}
+      if: ${{ inputs.operation == 'build-image' && steps.check.outputs.should-build == 'true' }}
 
     - name: Share architecture digest
       uses: actions/upload-artifact@v7
@@ -187,7 +180,7 @@ runs:
         if-no-files-found: error
         retention-days: 1
         overwrite: true
-      if: ${{ inputs.operation == 'build-image' && steps.context.outputs.should-build == 'true' }}
+      if: ${{ inputs.operation == 'build-image' && steps.check.outputs.should-build == 'true' }}
 
     - name: Download architecture digests
       uses: actions/download-artifact@v8
@@ -195,7 +188,7 @@ runs:
         pattern: image-digest-*
         path: ${{ runner.temp }}/release-actions/digests
         merge-multiple: true
-      if: ${{ inputs.operation == 'publish-image' && steps.context.outputs.should-build == 'true' }}
+      if: ${{ inputs.operation == 'publish-image' && steps.context.outputs.has-release == 'true' }}
 
     - name: Publish and verify multi-platform image
       id: publish
@@ -217,4 +210,4 @@ runs:
         RELEASE_TAG: ${{ steps.release.outputs.tag || steps.context.outputs.tag }}
         IMAGE_DIGEST: ${{ steps.publish.outputs.digest || steps.check.outputs.digest || steps.build.outputs.digest }}
       run: |
-        node "$ACTION_DIRECTORY/src/docker/finish.mjs"
+        node "$ACTION_DIRECTORY/src/action-results.mjs"

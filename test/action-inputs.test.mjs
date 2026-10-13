@@ -1,7 +1,5 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { spawnSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
 import { validateInputs } from '../src/action-inputs.mjs'
 
 const valid = {
@@ -48,14 +46,4 @@ test('build accepts a native arm64 runner', () => {
   const result = validateInputs(inputs)
 
   assert.equal(result.architecture, 'arm64')
-})
-
-test('release rejects the wrong checkout before API access', () => {
-  const script = fileURLToPath(new URL('../src/release/release.mjs', import.meta.url))
-  const env = { ...process.env, GITHUB_SHA: 'another-commit', GITHUB_TOKEN: '' }
-
-  const result = spawnSync(process.execPath, [script], { env, encoding: 'utf8' })
-
-  assert.notEqual(result.status, 0)
-  assert.match(result.stderr, /Checkout must use the commit/)
 })

@@ -17,17 +17,19 @@ There are no architecture, release tag, matrix, image name or cache-prefix input
 
 | Job     | Runner                                          | Permissions                         | Dependency                    |
 | ------- | ----------------------------------------------- | ----------------------------------- | ----------------------------- |
-| Release | `ubuntu-24.04`                                  | `contents: write`, `packages: read` | Application CI, when present. |
+| Release | `ubuntu-24.04`                                  | `contents: write`                   | Application CI, when present. |
 | Build   | Matrix of `ubuntu-24.04` and `ubuntu-24.04-arm` | `contents: read`, `packages: write` | Release.                      |
 | Publish | `ubuntu-24.04`                                  | `packages: write`                   | Both builds.                  |
 
-Check out complete history in the release job (`fetch-depth: 0`) and source code in the build job. Publish needs no checkout. All operations must run in the same workflow run from `main` at the same source commit.
+Check out complete history in the release job (`fetch-depth: 0`) and source code in the build job. Use standard checkout without overriding `ref` or modifying source files. It selects the commit that started the workflow, not newer commits arriving while it runs. Publish needs no checkout. All operations must run in the same workflow run from `main` at the same source commit.
+
+For tag and GitHub release only, use [release-only.yml](../examples/release-only.yml). Create-release needs no Docker setup or GHCR access. The reusable workflow includes Docker; direct operations support applications with different release paths.
 
 Keep `release-actions-${{ github.repository }}` concurrency with `cancel-in-progress: false`. The examples use `fail-fast: false` for builds so a failed architecture does not cancel the other one.
 
 ## Internal data
 
-`create-release` uploads an internal release context containing the commit, tag and optional published digest, including when there is nothing to publish. Later operations retrieve it automatically from the same workflow run and check its commit. Build records must match the release tag and commit; artifact names identify the native architecture. Each workflow run coordinates one release.
+`create-release` uploads an internal release context containing only the commit and tag, including when there is nothing to publish. Later operations retrieve it automatically from the same workflow run and check its commit. Build records must match the release tag and commit; artifact names identify the native architecture. Each workflow run coordinates one release. Existing images are checked only by Docker operations.
 
 Applications do not need to define outputs or access these artifacts. If no release is needed or its image is already published, architecture builds are skipped internally. Publish verifies existing images again before reporting success.
 

@@ -2,11 +2,96 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, rmdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import getConfig from '../node_modules/semantic-release/lib/get-config.js'
 import { isolatedRelease } from '../src/release/isolated-release.mjs'
 import { ensureGithubRelease, githubApi } from '../src/release/github-release.mjs'
+import { createRelease } from '../src/release/release.mjs'
+
+test('a successful semantic-release publication returns its tag without querying GitHub again', async () => {
+  const run = async () => ({ nextRelease: { gitTag: 'v1.2.3' } })
+  const recover = async () => {
+    throw new Error('Recovery must not run after publication')
+  }
+
+  const tag = await createRelease({ run, recover })
+
+  assert.equal(tag, 'v1.2.3')
+})
+
+test('a failed semantic-release publication fails the run without rollback', async () => {
+  const run = async () => {
+    throw new Error('GitHub publish failed')
+  }
+  const recover = async () => {
+    throw new Error('Recovery belongs to the next attempt')
+  }
+
+  await assert.rejects(createRelease({ run, recover }), /GitHub publish failed/)
+})
+
+function repository(t, tags = []) {
+  const directory = mkdtempSync(join(tmpdir(), 'release-retry-'))
+  t.after(() => {
+    if (!resolve(directory).startsWith(resolve(tmpdir()) + sep)) throw new Error('Unexpected test directory')
+    rmSync(directory, { recursive: true, force: true })
+  })
+  const git = (args) => execFileSync('git', args, { cwd: directory, encoding: 'utf8' }).trim()
+  git(['init', '--quiet', '--initial-branch=main'])
+  git([
+    '-c',
+    'user.name=Release Tests',
+    '-c',
+    'user.email=release@example.com',
+    '-c',
+    'commit.gpgsign=false',
+    'commit',
+    '--quiet',
+    '--allow-empty',
+    '-m',
+    'feat: initial release'
+  ])
+  for (const tag of tags) git(['tag', tag])
+  return directory
+}
+
+test('a retry uses the existing tag instead of generating another version', async (t) => {
+  const cwd = repository(t, ['v1.2.3'])
+  const calls = []
+  const run = async () => false
+  const recover = async (release) => {
+    calls.push(release)
+  }
+
+  const tag = await createRelease({ cwd, run, recover })
+
+  assert.equal(tag, 'v1.2.3')
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].tag, tag)
+})
+
+test('no releasable changes and no tag finish without recovery', async (t) => {
+  const cwd = repository(t)
+  const run = async () => false
+  const recover = async () => {
+    throw new Error('No release to recover')
+  }
+
+  const tag = await createRelease({ cwd, run, recover })
+
+  assert.equal(tag, undefined)
+})
+
+test('multiple stable tags on the same commit make recovery ambiguous', async (t) => {
+  const cwd = repository(t, ['v1.2.3', 'v1.2.4'])
+  const run = async () => false
+  const recover = async () => {
+    throw new Error('Ambiguous recovery must not run')
+  }
+
+  await assert.rejects(createRelease({ cwd, run, recover }), /recovery is ambiguous/)
+})
 
 test('application dryRun, extensions and executable config cannot affect centralized release', async () => {
   const caller = mkdtempSync(join(tmpdir(), 'release-config-caller-'))

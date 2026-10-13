@@ -8,7 +8,6 @@
 | Build architecture is unsupported                | Use the example's native runner matrix. No architecture input or emulation is needed.                                      |
 | Release context is missing                       | Run `create-release` first in the same workflow run. Rerun all jobs if artifacts expired.                                  |
 | Context or build record does not match           | All operations must use the same repository, source commit and workflow run.                                               |
-| Checkout differs from the release commit         | Use standard checkout without overriding its ref.                                                                          |
 | No image is built                                | There are no releasable changes, or an existing image was verified. Subsequent jobs still start and skip their heavy work. |
 | GitHub or GHCR access is denied                  | Check job permissions, repository Actions policy and package access for this repository.                                   |
 | Docker cannot find files                         | Check `context`, `dockerfile` and `.dockerignore`.                                                                         |

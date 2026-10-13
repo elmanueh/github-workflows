@@ -7,21 +7,24 @@ The root `action.yml` exposes three stable operations: `create-release`, `build-
 - `src/release/`: isolated semantic-release configuration, GitHub release recovery and internal release context.
 - `src/docker/`: metadata, registry checks, architecture records and manifest publication.
 - `src/platforms.mjs`: supported architectures.
+- `src/action-outputs.mjs` and `src/action-results.mjs`: shared action outputs and operation results.
 - `test/`: versioning, recovery, publication, context and public contract tests.
 
 Dependencies and their lockfile live at the root. No QEMU or builders outside GitHub are needed.
 
 ## Runtime contracts
 
-Create-release requires a full source checkout on `main` matching the workflow SHA. Semantic-release uses an owned configuration directory and explicit application Git paths, preventing caller dry-run or extension settings from affecting it. A tag without its stable GitHub release is recoverable.
+Create-release uses standard checkout on `main` with full history. All checkouts must use the event commit without overriding `ref` or modifying the source; the action trusts checkout instead of rechecking HEAD. Semantic-release uses an owned configuration directory and explicit application Git paths, preventing caller dry-run or extension settings from affecting it. A successful new publication is accepted without querying GitHub again. A tag without its stable GitHub release is recoverable on a retry; failures do not trigger rollback.
 
-The scripts are internal to the action. Each workflow run coordinates one release; artifact downloads use that same run. Release context contains only revision, tag and digest. Image name, version and release state are derived rather than stored. Architecture records contain revision, tag and digest; their artifact and file names identify the architecture. Build records must match the release tag and commit, and build checkout must match that commit. The action detects architecture from the native Linux runtime, never from caller-supplied metadata.
+The scripts are internal to the action. Each workflow run coordinates one release; artifact downloads use that same run. Release context contains only revision and tag, with no Docker state. Image name, version and release state are derived rather than stored. Architecture records contain revision, tag and digest; their artifact and file names identify the architecture. Build records must match the release tag and commit. The action detects architecture from the native Linux runtime, never from caller-supplied metadata.
 
 Inputs are checked at the action entry point. Internal steps trust the action's outputs and execution conditions. Context and build records are checked when read; functions receiving those records do not repeat their validation. Internal artifact formats are not a public compatibility contract.
 
 The `release-context` artifact always exists after successful create-release, including a no-release state. Architecture records are uploaded only for required builds. Artifacts are retained for one day and replaced on reruns within the same run. Records from a previous successful architecture attempt can be reused by a failed-job retry.
 
 ## Publication safety
+
+Create-release does not set up Docker, log in to GHCR or inspect images. Each build checks for a matching published image before building. Publish downloads any available architecture artifacts by pattern; zero matches are allowed because an existing image needs no build records. If the image is absent, publication requires both records and fails when either is missing.
 
 Root manifests are inspected with Buildx `--raw` and hashed without trimming bytes. Children are subsequently checked by immutable digest; missing children do not make the root tag appear absent.
 

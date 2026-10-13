@@ -1,5 +1,5 @@
 import { appendFileSync } from 'node:fs'
-import { architectures } from '../platforms.mjs'
+import { architectures } from './platforms.mjs'
 
 export function output(values) {
   appendFileSync(

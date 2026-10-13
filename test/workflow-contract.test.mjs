@@ -77,7 +77,7 @@ test('optional reusable workflow retains Docker path inputs and result outputs',
   assert.equal(workflow.jobs.build.steps[1].with.operation, 'build-image')
 })
 
-test('publication verifies releases while downloading build records only when needed', () => {
+test('Docker preflight belongs to builds and publication accepts an existing image without build records', () => {
   const steps = read('action.yml').runs.steps
 
   const check = steps.find((step) => step.id === 'check')
@@ -86,11 +86,36 @@ test('publication verifies releases while downloading build records only when ne
 
   assert.equal(
     check.if.trim(),
-    "${{ inputs.operation == 'create-release' && steps.release.outputs.release-ready == 'true' }}"
+    "${{ inputs.operation == 'build-image' && steps.context.outputs.has-release == 'true' }}"
   )
   assert.equal(publish.if, "${{ inputs.operation == 'publish-image' && steps.context.outputs.has-release == 'true' }}")
-  assert.equal(
-    download.if,
-    "${{ inputs.operation == 'publish-image' && steps.context.outputs.should-build == 'true' }}"
-  )
+  assert.equal(download.if, "${{ inputs.operation == 'publish-image' && steps.context.outputs.has-release == 'true' }}")
+})
+
+test('create-release never runs Docker commands or Docker actions', () => {
+  const steps = read('action.yml').runs.steps
+  const dockerSteps = steps.filter((step) => step.uses?.startsWith('docker/') || step.run?.includes('/src/docker/'))
+  const releasePermissions = read('examples/release.yml').jobs.release.permissions
+
+  for (const step of dockerSteps) {
+    assert.ok(step.if, step.name)
+    assert.ok(!step.if.includes("operation == 'create-release'"), step.name)
+    assert.ok(
+      step.if.includes("operation != 'create-release'") ||
+        step.if.includes("operation == 'build-image'") ||
+        step.if.includes("operation == 'publish-image'"),
+      step.name
+    )
+  }
+  assert.deepEqual(releasePermissions, { contents: 'write' })
+})
+
+test('release-only example requires neither Docker jobs nor package permissions', () => {
+  const workflow = read('examples/release-only.yml')
+  const job = workflow.jobs.release
+
+  assert.deepEqual(Object.keys(workflow.jobs), ['release'])
+  assert.deepEqual(job.permissions, { contents: 'write' })
+  assert.equal(job.steps[0].with['fetch-depth'], 0)
+  assert.equal(job.steps[1].with.operation, 'create-release')
 })

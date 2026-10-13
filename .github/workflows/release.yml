@@ -48,7 +48,6 @@ jobs:
 
     permissions:
       contents: write
-      packages: read
 
     outputs:
       version: ${{ steps.release.outputs.version }}

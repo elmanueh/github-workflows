@@ -1,4 +1,4 @@
-import { output } from './outputs.mjs'
+import { output } from './action-outputs.mjs'
 
 const digest = process.env.IMAGE_DIGEST || ''
 output({ published: process.env.OPERATION === 'publish-image' && Boolean(digest), digest })

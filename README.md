@@ -19,6 +19,8 @@ with:
 
 The complete examples include permissions, concurrency and job dependencies. No personal access token or application-specific semantic-release configuration is needed.
 
+For tag and GitHub release only, use [examples/release-only.yml](examples/release-only.yml). This operation does not use Docker, GHCR or package permissions. Add the build and publish jobs only when your application needs an image.
+
 ## Operations
 
 | Operation        | What it does                                                                              |
@@ -59,7 +61,7 @@ For version `1.2.3`, you get Git tag `v1.2.3`, a GitHub release with notes, and 
 docker pull ghcr.io/your-owner/your-repository:v1.2.3
 ```
 
-The run summary includes the release link and verified image digest. Authenticate to GHCR before pulling a private image.
+The Docker publication summary includes the release link and verified image digest. Authenticate to GHCR before pulling a private image.
 
 ## Versioning and retries
 

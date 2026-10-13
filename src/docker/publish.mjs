@@ -1,10 +1,17 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { architectures } from '../platforms.mjs'
-import { docker, inspectRelease, verifyArchitecture } from './registry.mjs'
-import { identity, output, summary } from './outputs.mjs'
+import { assertDigest, docker, inspectRelease, verifyArchitecture } from './registry.mjs'
+import { identity, output, summary } from '../action-outputs.mjs'
 import { pathToFileURL } from 'node:url'
-import { loadContext, contextDirectory, validateBuildRecord } from '../release/context.mjs'
+import { loadContext, contextDirectory } from '../release/context.mjs'
+
+export function validateBuildRecord(record, context, architecture) {
+  if (record.tag !== context.tag || record.revision !== context.revision) {
+    throw new Error(`The ${architecture} build record does not belong to this release.`)
+  }
+  return assertDigest(record.digest)
+}
 
 export function publishImage(release, { loadDigests, run = docker, metadataFile }) {
   // Another completed attempt may already have published this exact release.

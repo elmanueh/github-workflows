@@ -3,11 +3,12 @@ import { test } from 'node:test'
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, rmdirSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { spawnSync, execFileSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { validateContext, validateBuildRecord } from '../src/release/context.mjs'
+import { validateContext } from '../src/release/context.mjs'
+import { validateBuildRecord } from '../src/docker/publish.mjs'
 
-const context = { revision: 'commit-a', tag: 'v1.2.3', digest: '' }
+const context = { revision: 'commit-a', tag: 'v1.2.3' }
 const digest = 'sha256:' + 'a'.repeat(64)
 
 test('context belongs to the current commit', () => {
@@ -67,15 +68,14 @@ function runner(t) {
   }
 }
 
-for (const [name, tag, imageDigest, shouldBuild] of [
-  ['pending release', 'v1.2.3', '', 'true'],
-  ['no release', '', '', 'false'],
-  ['published release', 'v1.2.3', digest, 'false']
+for (const [name, tag] of [
+  ['release', 'v1.2.3'],
+  ['no release', '']
 ]) {
   test(`save and load ${name} preserves public outputs`, (t) => {
     const mock = runner(t)
 
-    const saved = mock.run(['save'], { RELEASE_TAG: tag, IMAGE_DIGEST: imageDigest })
+    const saved = mock.run(['save'], { RELEASE_TAG: tag })
     writeFileSync(mock.outputFile, '')
     const loaded = mock.run()
 
@@ -83,13 +83,11 @@ for (const [name, tag, imageDigest, shouldBuild] of [
     assert.equal(loaded.status, 0, loaded.stderr)
     assert.deepEqual(JSON.parse(readFileSync(mock.releaseFile, 'utf8')), {
       revision: context.revision,
-      tag,
-      digest: imageDigest
+      tag
     })
     const outputs = readFileSync(mock.outputFile, 'utf8')
     assert.ok(outputs.includes(`version=${tag.slice(1)}\n`))
     assert.ok(outputs.includes(`has-release=${Boolean(tag)}\n`))
-    assert.ok(outputs.includes(`should-build=${shouldBuild}\n`))
     assert.ok(outputs.includes('image-name=ghcr.io/example/app\n'))
   })
 }
@@ -108,23 +106,3 @@ for (const [name, contents, error] of [
     assert.match(result.stderr, error)
   })
 }
-
-test('build checkout must match the context commit', (t) => {
-  const mock = runner(t)
-  writeFileSync(mock.releaseFile, JSON.stringify(context))
-
-  const result = mock.run([], { OPERATION: 'build-image' })
-
-  assert.notEqual(result.status, 0)
-  assert.match(result.stderr, /Build checkout does not match/)
-})
-
-test('matching build checkout loads its context', (t) => {
-  const mock = runner(t)
-  const revision = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
-  writeFileSync(mock.releaseFile, JSON.stringify({ ...context, revision }))
-
-  const result = mock.run([], { OPERATION: 'build-image', GITHUB_SHA: revision })
-
-  assert.equal(result.status, 0, result.stderr)
-})

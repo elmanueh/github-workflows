@@ -13,7 +13,7 @@ export function validateInputs({
     throw new Error('operation must be create-release, build-image or publish-image.')
   }
   if (ref !== 'refs/heads/main') throw new Error('Run this release workflow from the main branch.')
-  if (platform !== 'linux') throw new Error('Run this action on a Linux runner with Docker.')
+  if (platform !== 'linux') throw new Error('Run this action on a Linux runner.')
   const nativeArchitecture = { x64: 'amd64', arm64: 'arm64' }[architecture] || ''
   if (operation === 'build-image' && !architectures.includes(nativeArchitecture)) {
     throw new Error('build-image requires a native Linux amd64 or arm64 runner.')
